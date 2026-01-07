@@ -2,78 +2,78 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/architecture/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/quickstart/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/advanced-administration/limitador-persistence/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/advanced-administration/observability/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/advanced-administration/storage-configuration/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/group-membership-known-issues/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/model-setup/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/tier-concepts/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/tier-configuration/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/tier-modification-known-issues/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/tier-overview/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/configuration-and-management/token-management/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/install/maas-setup/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/install/odh-setup/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/install/prerequisites/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/install/rhoai-setup/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/install/validation/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
     <url>
          <loc>https://opendatahub-io.github.io/models-as-a-service/v0.1.0/user-guide/self-service-model-access/</loc>
-         <lastmod>2025-12-23</lastmod>
+         <lastmod>2026-01-07</lastmod>
     </url>
 </urlset>
