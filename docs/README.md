@@ -167,15 +167,15 @@ This keeps the version dropdown clean for end users while still making developme
 
 When a new release tag is created using the `create-release.yml` workflow, the following automation occurs:
 
-1. **MAAS_REF Updates**: All references to `MAAS_REF="main"` in documentation and scripts are automatically updated to use the new release tag (e.g., `MAAS_REF="v1.0.0"`).
+1. **MAAS_REF Updates**: All references to `MAAS_REF="v1.0.3"` in documentation and scripts are automatically updated to use the new release tag (e.g., `MAAS_REF="v1.0.0"`).
 
 2. **What Gets Updated**:
    - Documentation files (`.md` files)
    - Deployment scripts (`.sh` files)
-   - All variations: `export MAAS_REF="main"`, `MAAS_REF="main"`, `MAAS_REF:=main`
+   - All variations: `export MAAS_REF="v1.0.3"`, `MAAS_REF="v1.0.3"`, `MAAS_REF:=v1.0.3`
 
 3. **Usage**: 
    - For production deployments, use a release tag: `export MAAS_REF="v1.0.0"`
-   - For development/testing, use: `export MAAS_REF="main"`
+   - For development/testing, use: `export MAAS_REF="v1.0.3"`
 
 This ensures that documentation and deployment scripts always reference stable release tags rather than the moving `main` branch.

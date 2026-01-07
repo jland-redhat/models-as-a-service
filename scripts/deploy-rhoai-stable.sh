@@ -325,7 +325,7 @@ else
   done
 fi
 
-: "${MAAS_REF:=main}"
+: "${MAAS_REF:=v1.0.3}"
 kubectl apply --server-side=true \
   -f <(kustomize build "https://github.com/opendatahub-io/models-as-a-service.git/deployment/overlays/openshift?ref=${MAAS_REF}" | \
        envsubst '$CLUSTER_DOMAIN')
