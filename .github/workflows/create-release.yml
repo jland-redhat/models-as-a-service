@@ -140,8 +140,8 @@ jobs:
 
       - name: Update kustomization files with new tag
         run: |
-          chmod +x scripts/update-kustomize-tag.sh
-          ./scripts/update-kustomize-tag.sh "${{ needs.prepare-release.outputs.version_tag }}"
+          chmod +x .github/scripts/update-kustomize-tag.sh
+          .github/scripts/update-kustomize-tag.sh "${{ needs.prepare-release.outputs.version_tag }}"
 
       - name: Update MAAS_REF references
         run: |
