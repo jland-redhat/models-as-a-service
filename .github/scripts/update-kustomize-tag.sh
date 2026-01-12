@@ -1,7 +1,7 @@
 #!/bin/bash
 # Script to update image tags in kustomization.yaml files
-# Usage: ./scripts/update-kustomize-tag.sh <tag>
-# Example: ./scripts/update-kustomize-tag.sh v1.0.0
+# Usage: ./.github/scripts/update-kustomize-tag.sh <tag>
+# Example: ./.github/scripts/update-kustomize-tag.sh v1.0.0
 
 set -euo pipefail
 
@@ -13,7 +13,7 @@ if [ $# -lt 1 ]; then
 fi
 
 TAG="$1"
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 echo "Updating kustomization.yaml files with tag: $TAG"
 
