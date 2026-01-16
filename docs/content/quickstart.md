@@ -29,13 +29,13 @@ This guide provides quickstart instructions for deploying the MaaS Platform infr
 For OpenShift clusters, use the automated deployment script:
 
 ```bash
-export MAAS_REF="v1.0.6"  # Use the latest release tag, or "main" for development
+export MAAS_REF="v1.0.7"  # Use the latest release tag, or "main" for development
 ./scripts/deploy-rhoai-stable.sh
 ```
 
 !!! note "Using Release Tags"
     The `MAAS_REF` environment variable should reference a release tag (e.g., `v1.0.0`) for production deployments.
-    The release workflow automatically updates all `MAAS_REF="v1.0.6"` references in documentation and scripts
+    The release workflow automatically updates all `MAAS_REF="v1.0.7"` references in documentation and scripts
     to use the new release tag when a release is created. Use `"main"` only for development/testing.
 
 ### Verify Deployment
