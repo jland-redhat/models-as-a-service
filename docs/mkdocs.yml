@@ -54,9 +54,7 @@ nav:
   - Administrator Guide:
     - Prerequisites:
       - Overview: install/prerequisites.md
-      - Operators:
-        - Open Data Hub: install/odh-setup.md
-        - Red Hat OpenShift AI: install/rhoai-setup.md
+      - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
       - Validation: install/validation.md
@@ -65,6 +63,7 @@ nav:
       - Tier Configuration: configuration-and-management/tier-configuration.md
       - Tier Concepts: configuration-and-management/tier-concepts.md
       - Token Management: configuration-and-management/token-management.md
+      - TLS Configuration: configuration-and-management/tls-configuration.md
     - Model Setup: configuration-and-management/model-setup.md
     - Known Issues:
       - Group Membership: configuration-and-management/group-membership-known-issues.md

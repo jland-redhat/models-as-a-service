@@ -26,6 +26,8 @@
 #   SKIP_SMOKE      - Skip smoke tests (default: false)
 #   SKIP_TOKEN_VERIFICATION - Skip token metadata verification (default: false)
 #   MAAS_API_IMAGE - Custom image for MaaS API (e.g., quay.io/opendatahub/maas-api:pr-232)
+#   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
+#                    Affects both deploy-openshift.sh and smoke.sh
 # =============================================================================
 
 set -euo pipefail
@@ -50,10 +52,14 @@ find_project_root() {
 # Configuration
 PROJECT_ROOT="$(find_project_root)"
 
+# Source helper functions
+source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
+
 # Options (can be set as environment variables)
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_SMOKE=${SKIP_SMOKE:-false}
 SKIP_TOKEN_VERIFICATION=${SKIP_TOKEN_VERIFICATION:-false}
+INSECURE_HTTP=${INSECURE_HTTP:-false}
 
 print_header() {
     echo ""
@@ -89,15 +95,37 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform on OpenShift..."
-    if ! "$PROJECT_ROOT/scripts/deploy-openshift.sh"; then
+    if ! "$PROJECT_ROOT/scripts/deploy-rhoai-stable.sh" --operator-type odh --operator-catalog quay.io/opendatahub/opendatahub-operator-catalog:latest --channel fast; then
         echo "❌ ERROR: MaaS platform deployment failed"
         exit 1
     fi
+    # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
+    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+        echo "❌ ERROR: DataScienceCluster components did not become ready"
+        exit 1
+    fi
+    
+    # Wait for Authorino to be ready and auth service cluster to be healthy
+    echo "Waiting for Authorino and auth service to be ready..."
+    if ! wait_authorino_ready 600; then
+        echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
+    fi
+    
     echo "✅ MaaS platform deployment completed"
 }
 
 deploy_models() {
     echo "Deploying simulator Model"
+    # Create llm namespace if it does not exist
+    if ! kubectl get namespace llm >/dev/null 2>&1; then
+        echo "Creating 'llm' namespace..."
+        if ! kubectl create namespace llm; then
+            echo "❌ ERROR: Failed to create 'llm' namespace"
+            exit 1
+        fi
+    else
+        echo "'llm' namespace already exists"
+    fi
     if ! (cd "$PROJECT_ROOT" && kustomize build docs/samples/models/simulator/ | kubectl apply -f -); then
         echo "❌ ERROR: Failed to deploy simulator model"
         exit 1
@@ -105,7 +133,14 @@ deploy_models() {
     echo "✅ Simulator model deployed"
     
     echo "Waiting for model to be ready..."
-    oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s
+    if ! oc wait llminferenceservice/facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout=300s; then
+        echo "❌ ERROR: Timed out waiting for model to be ready"
+        echo "=== LLMInferenceService YAML dump ==="
+        oc get llminferenceservice/facebook-opt-125m-simulated -n llm -o yaml || true
+        echo "=== Events in llm namespace ==="
+        oc get events -n llm --sort-by='.lastTimestamp' || true
+        exit 1
+    fi
     echo "✅ Simulator Model deployed"
 }
 
@@ -113,11 +148,14 @@ validate_deployment() {
     echo "Deployment Validation"
     if [ "$SKIP_VALIDATION" = false ]; then
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "❌ ERROR: Deployment validation failed"
-            exit 1
-        else
-            echo "✅ Deployment validation completed"
+            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
+            sleep 60
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
+                echo "❌ ERROR: Deployment validation failed after retry"
+                exit 1
+            fi
         fi
+        echo "✅ Deployment validation completed"
     else
         echo "⏭️  Skipping validation"
     fi
@@ -133,12 +171,13 @@ setup_vars_for_tests() {
     fi
     echo "K8S_CLUSTER_URL: ${K8S_CLUSTER_URL}"
 
-    export CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-    export HOST="maas.${CLUSTER_DOMAIN}"
-    export MAAS_API_BASE_URL="http://${HOST}/maas-api"
-    echo "CLUSTER_DOMAIN: ${CLUSTER_DOMAIN}"
-    echo "HOST: ${HOST}"
-    echo "MAAS_API_BASE_URL: ${MAAS_API_BASE_URL}"
+    # Export INSECURE_HTTP for smoke.sh (it handles MAAS_API_BASE_URL detection)
+    # This aligns with deploy-openshift.sh which also respects INSECURE_HTTP
+    export INSECURE_HTTP
+    if [ "$INSECURE_HTTP" = "true" ]; then
+        echo "⚠️  INSECURE_HTTP=true - will use HTTP for tests"
+    fi
+    
     echo "✅ Variables for tests setup completed"
 }
 
@@ -223,6 +262,7 @@ print_header "Validating Deployment and Token Metadata Logic"
 validate_deployment
 run_token_verification
 
+sleep 120       # Wait for the rate limit to reset
 run_smoke_tests
 
 # Test edit user  
