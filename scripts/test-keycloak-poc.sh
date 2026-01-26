@@ -2,12 +2,42 @@
 
 # Keycloak PoC Test Script
 # This script tests the Keycloak-based token minting PoC
+#
+# Usage: ./test-keycloak-poc.sh [-u username]
+#   -u, --username: Keycloak username to use for testing (default: free-user-1)
 
 set -e
+
+# Parse CLI arguments
+KEYCLOAK_USERNAME="free-user-1"  # Default
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -u|--username)
+            KEYCLOAK_USERNAME="$2"
+            shift 2
+            ;;
+        -h|--help)
+            echo "Usage: $0 [-u username]"
+            echo ""
+            echo "Options:"
+            echo "  -u, --username    Keycloak username to use for testing (default: free-user-1)"
+            echo "  -h, --help         Show this help message"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use -h or --help for usage information"
+            exit 1
+            ;;
+    esac
+done
 
 echo "========================================="
 echo "🧪 Keycloak PoC Test"
 echo "========================================="
+echo ""
+echo "Testing with user: ${KEYCLOAK_USERNAME}"
 echo ""
 
 # Get cluster domain
@@ -32,10 +62,10 @@ KEYCLOAK_URL="https://${KEYCLOAK_ROUTE}"
 echo "   Keycloak URL: $KEYCLOAK_URL"
 
 # Get a user token from Keycloak using password grant
-echo "   Requesting token for user: free-user-1..."
+echo "   Requesting token for user: ${KEYCLOAK_USERNAME}..."
 USER_TOKEN=$(curl -sSk -X POST "${KEYCLOAK_URL}/realms/maas/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=free-user-1" \
+  -d "username=${KEYCLOAK_USERNAME}" \
   -d "password=password" \
   -d "grant_type=password" \
   -d "client_id=maas-api" \
@@ -46,7 +76,7 @@ if [ -z "$USER_TOKEN" ] || [ "$USER_TOKEN" == "null" ]; then
     echo "   Make sure:"
     echo "   1. Keycloak is running and accessible"
     echo "   2. The 'maas' realm exists"
-    echo "   3. User 'free-user-1' exists with password 'password'"
+    echo "   3. User '${KEYCLOAK_USERNAME}' exists with password 'password'"
     echo "   4. Client 'maas-api' has direct access grants enabled"
     exit 1
 fi
