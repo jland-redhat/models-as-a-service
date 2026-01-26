@@ -55,6 +55,24 @@ MAAS_TOKEN=$(curl -sSk -X POST "https://${HOST}/maas-api/v1/tokens" \
 # List models
 curl -sSk -H "Authorization: Bearer ${MAAS_TOKEN}" \
   "https://${HOST}/maas-api/v1/models" | jq .
+
+# Make a chat completion request to a model
+# First, get the model ID and URL from the models list
+MODEL_ID=$(curl -sSk -H "Authorization: Bearer ${MAAS_TOKEN}" \
+  "https://${HOST}/maas-api/v1/models" | jq -r '.data[0].id // empty')
+MODEL_URL=$(curl -sSk -H "Authorization: Bearer ${MAAS_TOKEN}" \
+  "https://${HOST}/maas-api/v1/models" | jq -r '.data[0].url // empty')
+
+# Then make a completion request
+curl -sSk -H "Authorization: Bearer ${MAAS_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d "{
+    \"model\": \"${MODEL_ID}\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"Hello, how are you?\"}],
+    \"max_tokens\": 100
+  }" \
+  "${MODEL_URL}/v1/chat/completions" | jq .
 ```
 
 ### Available Test Users
@@ -146,7 +164,41 @@ TOKEN=$(curl -sSk -X POST "https://${KEYCLOAK_ROUTE}/realms/maas/protocol/openid
 curl -sSk \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  "${HOST}/maas-api/v1/models"
+  "${HOST}/maas-api/v1/models" | jq .
+
+# Get the model URL from the models list
+MODEL_ID=$(curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  "${HOST}/maas-api/v1/models" | jq -r '.data[0].id // empty')
+MODEL_URL=$(curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  "${HOST}/maas-api/v1/models" | jq -r '.data[0].url // empty')
+
+# Make a POST request to the model's completions endpoint using the model URL
+curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d "{
+    \"model\": \"${MODEL_ID}\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"Hello, how are you?\"}],
+    \"max_tokens\": 100
+  }" \
+  "${MODEL_URL}/v1/chat/completions" | jq .
+
+# Get the model URL from the models list and make a completion request
+MODEL_ID=$(curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  "${HOST}/maas-api/v1/models" | jq -r '.data[0].id // empty')
+MODEL_URL=$(curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  "${HOST}/maas-api/v1/models" | jq -r '.data[0].url // empty')
+
+# Make a chat completion request using the model URL
+curl -sSk -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -X POST \
+  -d "{
+    \"model\": \"${MODEL_ID}\",
+    \"messages\": [{\"role\": \"user\", \"content\": \"Hello, how are you?\"}],
+    \"max_tokens\": 100
+  }" \
+  "${MODEL_URL}/v1/chat/completions" | jq .
 ```
 
 ## Rollback to ServiceAccount Mode
@@ -189,6 +241,42 @@ kubectl describe authpolicy gateway-auth-policy -n openshift-ingress
 
 # Check Authorino logs
 kubectl logs -n kuadrant-system -l control-plane=authorino | grep -i oidc
+```
+
+### Model access returns 403 Forbidden
+
+This indicates the authorization check failed. The Gateway AuthPolicy calls `/v1/models/authorize` to check if your tier matches the model's tier requirement.
+
+**Check**:
+```bash
+# Verify your tier
+curl -k -X POST "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/tiers/lookup" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"groups": ["tier-free-users"]}'
+
+# Check model tier annotation
+kubectl get llminferenceservice -A -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}{"\n"}{end}'
+
+# Test authorization directly
+curl -k -X POST "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models/authorize" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/llm/{model-name}/v1/chat/completions", "tier": "free"}'
+```
+
+### TLS Certificate Issues
+
+**Symptom**: `x509: certificate signed by unknown authority` in Authorino logs
+
+**Description**: Authorino may fail to verify TLS certificates when calling internal maas-api endpoints for metadata lookups. This can cause authorization failures.
+
+**Solution**: Follow the TLS configuration instructions in the repository deployment scripts. The `deploy-keycloak-poc.sh` script includes automated CA bundle configuration for Authorino.
+
+**Check**:
+```bash
+# Check Authorino logs for TLS errors
+kubectl logs -n kuadrant-system deployment/authorino | grep -i "certificate\|tls\|x509"
 ```
 
 ## Next Steps

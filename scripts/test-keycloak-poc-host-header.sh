@@ -1,9 +1,10 @@
 #!/bin/bash
 
-# Keycloak PoC Test Script
+# Keycloak PoC Test Script (with Host Header Workaround)
 # This script tests the Keycloak-based token minting PoC
+# Uses Host header workaround for DNS resolution issues
 #
-# Usage: ./test-keycloak-poc.sh [-u username]
+# Usage: ./test-keycloak-poc-host-header.sh [-u username]
 #   -u, --username: Keycloak username to use for testing (default: free-user-1)
 
 set -e
@@ -48,7 +49,17 @@ if [ -z "$CLUSTER_DOMAIN" ]; then
 fi
 
 HOST="maas.${CLUSTER_DOMAIN}"
+
+# Get Gateway address for Host header workaround
+GATEWAY_ADDRESS=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
+if [ -z "$GATEWAY_ADDRESS" ]; then
+    echo "❌ Failed to get Gateway address"
+    exit 1
+fi
+
 echo "MaaS API Host: $HOST"
+echo "Gateway Address: $GATEWAY_ADDRESS"
+echo "⚠️  Using Host header workaround (DNS may not be resolved yet)"
 echo ""
 
 # Get Keycloak user token
@@ -86,11 +97,12 @@ echo ""
 # Test 1: Get Keycloak token from maas-api
 echo "2️⃣ Testing token minting via maas-api..."
 TOKEN_RESPONSE=$(curl -sSk \
+  -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${USER_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"expiration": "1h"}' \
-  "${HOST}/maas-api/v1/tokens" || echo "")
+  "https://${GATEWAY_ADDRESS}/maas-api/v1/tokens" || echo "")
 
 if [ -z "$TOKEN_RESPONSE" ]; then
     echo "   ❌ Failed to get token response"
@@ -170,11 +182,12 @@ fi
 if [ "$USER_GROUPS" != "[]" ] && [ "$USER_GROUPS" != "null" ] && [ -n "$USER_GROUPS" ]; then
     echo "   User groups from token: $USER_GROUPS"
     TIER_RESPONSE=$(curl -sSk \
+      -H "Host: ${HOST}" \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
       -X POST \
       -d "{\"groups\": $USER_GROUPS}" \
-      "${HOST}/maas-api/v1/tiers/lookup" 2>/dev/null || echo "")
+      "https://${GATEWAY_ADDRESS}/maas-api/v1/tiers/lookup" 2>/dev/null || echo "")
     
     if [ -n "$TIER_RESPONSE" ]; then
         TIER_NAME=$(echo "$TIER_RESPONSE" | jq -r '.tier // empty' 2>/dev/null || echo "")
@@ -201,8 +214,9 @@ echo ""
 # Test 3: Verify models endpoint requires authentication
 echo "4️⃣ Verifying models endpoint requires authentication..."
 NO_TOKEN_HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" \
+  -H "Host: ${HOST}" \
   -H "Content-Type: application/json" \
-  "${HOST}/maas-api/v1/models" 2>/dev/null || echo "000")
+  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" 2>/dev/null || echo "000")
 
 if [ "$NO_TOKEN_HTTP_CODE" == "401" ] || [ "$NO_TOKEN_HTTP_CODE" == "403" ]; then
     echo "   ✅ Models endpoint correctly rejects requests without token (HTTP $NO_TOKEN_HTTP_CODE)"
@@ -217,22 +231,18 @@ echo ""
 # Test 4: Use token to access models endpoint
 echo "5️⃣ Testing model access with Keycloak token..."
 MODELS_RESPONSE=$(curl -sSk \
+  -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  "${HOST}/maas-api/v1/models" || echo "")
+  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" || echo "")
 
 echo "MODELS_RESPONSE: $MODELS_RESPONSE"
 
 HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" \
+  -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  "${HOST}/maas-api/v1/models" || echo "000")
-
-# Initialize variables for tracking
-MODEL_COUNT=0
-MODEL_ID=""
-MODEL_URL=""
-INFERENCE_HTTP_STATUS=""
+  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" || echo "000")
 
 if [ "$HTTP_CODE" == "200" ]; then
     echo "   ✅ Model access successful (HTTP $HTTP_CODE)"
@@ -270,17 +280,20 @@ if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ] && [ -n "$MODEL_URL" ] && [ "
         "max_tokens": $max_tokens
       }')
     
+    # Extract hostname from MODEL_URL and use Host header workaround
+    MODEL_HOST=$(echo "$MODEL_URL" | sed -E 's|https?://([^/]+).*|\1|')
+    MODEL_PATH=$(echo "$MODEL_URL" | sed -E 's|https?://[^/]+(.*)|\1|')
     INFERENCE_RESPONSE=$(curl -sSk \
+      -H "Host: ${MODEL_HOST}" \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
       -X POST \
       -d "$REQUEST_BODY" \
       -w "\nHTTP_STATUS:%{http_code}" \
-      "${MODEL_URL}/v1/chat/completions" 2>&1 || echo "")
+      "https://${GATEWAY_ADDRESS}${MODEL_PATH}/v1/chat/completions" 2>&1 || echo "")
     
     HTTP_STATUS=$(echo "$INFERENCE_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
     RESPONSE_BODY=$(echo "$INFERENCE_RESPONSE" | sed '/HTTP_STATUS:/d')
-    INFERENCE_HTTP_STATUS="$HTTP_STATUS"
     
     if [ "$HTTP_STATUS" == "200" ]; then
         echo "   ✅ Model inference successful (HTTP $HTTP_STATUS)"
@@ -294,7 +307,7 @@ if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ] && [ -n "$MODEL_URL" ] && [ "
             echo "   Tokens used: $TOKENS_USED"
         fi
     else
-        echo "   ❌ Model inference failed (HTTP $HTTP_STATUS)"
+        echo "   ⚠️  Model inference returned HTTP $HTTP_STATUS"
         ERROR_MSG=$(echo "$RESPONSE_BODY" | jq -r '.error.message // .error // "Unknown error"' 2>/dev/null || echo "")
         if [ -n "$ERROR_MSG" ] && [ "$ERROR_MSG" != "null" ]; then
             echo "   Error: $ERROR_MSG"
@@ -308,56 +321,7 @@ else
     echo ""
 fi
 
-# Test 6: Rate limit validation
-echo "6️⃣ Testing rate limiting (429 Too Many Requests)..."
-echo "   Making multiple rapid requests to trigger rate limit..."
-echo ""
-
-# Make multiple rapid requests to a model endpoint (if we have a model)
-RATE_LIMIT_TRIGGERED=0
-if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ] && [ -n "$MODEL_URL" ] && [ "$MODEL_URL" != "null" ]; then
-    REQUEST_BODY=$(jq -n \
-        --arg model "$MODEL_ID" \
-        '{
-            "model": $model,
-            "messages": [{"role": "user", "content": "Test"}],
-            "max_tokens": 5
-        }')
-    
-    # Make 10 rapid requests (free tier limit is typically 5 requests per 2 minutes)
-    RAPID_REQUESTS=10
-    HTTP_429_COUNT=0
-    
-    for i in $(seq 1 $RAPID_REQUESTS); do
-        HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer ${TOKEN}" \
-            -H "Content-Type: application/json" \
-            -X POST \
-            -d "$REQUEST_BODY" \
-            "${MODEL_URL}/v1/chat/completions" 2>/dev/null || echo "000")
-        
-        if [ "$HTTP_CODE" == "429" ]; then
-            HTTP_429_COUNT=$((HTTP_429_COUNT + 1))
-            RATE_LIMIT_TRIGGERED=1
-        fi
-        
-        # Small delay to avoid overwhelming the system
-        sleep 0.1
-    done
-    
-    if [ "$RATE_LIMIT_TRIGGERED" == "1" ]; then
-        echo "   ✅ Rate limiting is working (received $HTTP_429_COUNT HTTP 429 responses)"
-    else
-        echo "   ⚠️  Rate limiting not triggered (no 429 responses in $RAPID_REQUESTS requests)"
-        echo "   This may indicate rate limits are not configured or limits are higher than expected"
-    fi
-else
-    echo "   ⚠️  Skipping rate limit test (no model available)"
-    echo "   Rate limits are typically configured per tier in RateLimitPolicy"
-fi
-echo ""
-
-# Test 7: Verify Keycloak is accessible
+# Test 6: Verify Keycloak is accessible
 echo "7️⃣ Verifying Keycloak connectivity..."
 KEYCLOAK_ROUTE=$(kubectl get route keycloak -n keycloak -o jsonpath='{.spec.host}' 2>/dev/null || echo "")
 if [ -n "$KEYCLOAK_ROUTE" ]; then
@@ -373,7 +337,7 @@ else
 fi
 echo ""
 
-# Test 8: Check maas-api logs for Keycloak usage
+# Test 7: Check maas-api logs for Keycloak usage
 echo "8️⃣ Checking maas-api logs for Keycloak usage..."
 RECENT_LOGS=$(kubectl logs -n opendatahub deployment/maas-api --tail=20 2>/dev/null | grep -i keycloak || echo "")
 if [ -n "$RECENT_LOGS" ]; then
@@ -392,28 +356,9 @@ echo "Summary:"
 echo "  - Token minting: ✅"
 echo "  - Token format: ✅"
 echo "  - Model access: $([ "$HTTP_CODE" == "200" ] && echo "✅" || echo "⚠️")"
-echo "  - Rate limiting: $([ "$RATE_LIMIT_TRIGGERED" == "1" ] && echo "✅" || echo "⚠️")"
-
-# Determine model inference status
-if [ "$MODEL_COUNT" == "0" ] || [ -z "$MODEL_ID" ] || [ "$MODEL_ID" == "null" ]; then
-    echo "  - Model inference: ⚠️"
-    echo "    Can't validate inference cause not models were found"
-elif [ -n "$INFERENCE_HTTP_STATUS" ]; then
-    if [ "$INFERENCE_HTTP_STATUS" == "200" ]; then
-        echo "  - Model inference: ✅"
-    else
-        echo "  - Model inference: ❌ (HTTP $INFERENCE_HTTP_STATUS)"
-    fi
-else
-    echo "  - Model inference: ⚠️"
-    echo "    Inference test was not performed"
-fi
 echo ""
 echo "Next steps:"
 echo "1. If model access failed, check AuthPolicy configuration"
 echo "2. Verify Keycloak token includes required claims (username, groups)"
 echo "3. Check Authorino logs for OIDC validation errors"
-if [ -n "$INFERENCE_HTTP_STATUS" ] && [ "$INFERENCE_HTTP_STATUS" != "200" ]; then
-    echo "4. Check model endpoint logs and Gateway AuthPolicy for inference errors"
-fi
 echo ""

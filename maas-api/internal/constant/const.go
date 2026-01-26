@@ -18,4 +18,5 @@ const (
 	AnnotationGenAIUseCase = "opendatahub.io/genai-use-case"
 	AnnotationDescription  = "openshift.io/description"
 	AnnotationDisplayName  = "openshift.io/display-name"
+	AnnotationTiers        = "alpha.maas.opendatahub.io/tiers"
 )

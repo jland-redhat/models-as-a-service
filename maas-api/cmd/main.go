@@ -233,6 +233,10 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 
+	// Model authorization endpoint for Gateway AuthPolicy
+	modelsAuthHandler := models.NewAuthHandler(cluster.LLMInferenceServiceLister, log)
+	v1Routes.POST("/models/authorize", modelsAuthHandler.ModelAuthorize)
+
 	tokenRoutes := v1Routes.Group("/tokens", tokenHandler.ExtractUserInfo())
 	tokenRoutes.POST("", tokenHandler.IssueToken)
 	tokenRoutes.DELETE("", apiKeyHandler.RevokeAllTokens)

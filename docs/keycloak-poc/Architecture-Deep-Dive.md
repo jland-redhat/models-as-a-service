@@ -117,9 +117,10 @@ sequenceDiagram
     participant Authorino
     participant MaaSAPI
     participant TierLookup
+    participant ModelAuth
     participant Model
 
-    User->>Gateway: GET /maas-api/v1/models<br/>Authorization: Bearer {Keycloak Token}
+    User->>Gateway: POST /llm/{model}/v1/chat/completions<br/>Authorization: Bearer {Keycloak Token}
     Gateway->>Authorino: Enforce Gateway AuthPolicy
     
     Note over Authorino: Authentication Phase
@@ -128,26 +129,30 @@ sequenceDiagram
     Authorino->>Keycloak: Validate JWT Signature
     Keycloak-->>Authorino: Token Valid<br/>(preferred_username, groups)
     
-    Note over Authorino: Metadata Phase
+    Note over Authorino: Metadata Phase - Tier Lookup
     Authorino->>TierLookup: POST /v1/tiers/lookup<br/>{ "groups": ["tier-free-users"] }
     TierLookup->>TierLookup: Match groups to tier
     TierLookup-->>Authorino: { "tier": "free", "displayName": "Free Tier" }
+    Note over Authorino: Store in auth.metadata.matchedTier
     
-    Note over Authorino: Response Phase
-    Authorino->>Gateway: Add Headers:<br/>X-MaaS-Username: free-user-1<br/>X-MaaS-Group: tier-free-users<br/>X-MaaS-Tier: free
+    Note over Authorino: Metadata Phase - Model Authorization
+    Authorino->>ModelAuth: POST /v1/models/authorize<br/>{ "path": "/llm/{model}/v1/chat/completions", "tier": "free" }
+    ModelAuth->>ModelAuth: Lookup LLMInferenceService by name
+    ModelAuth->>ModelAuth: Check tier annotation<br/>(alpha.maas.opendatahub.io/tiers)
+    ModelAuth-->>Authorino: { "allowed": true/false, "reason": "..." }
+    Note over Authorino: Store in auth.metadata.modelAccess
     
-    Gateway->>MaaSAPI: Forward with headers
-    MaaSAPI->>MaaSAPI: ListAvailableLLMs()
-    
-    loop For each model
-        MaaSAPI->>Gateway: OPTIONS /llm/{model}/v1/chat/completions<br/>Authorization: Bearer {User Token}
-        Gateway->>Authorino: Validate Token
-        Authorino-->>Gateway: Valid (200/405)
-        Gateway-->>MaaSAPI: Response
-        MaaSAPI->>MaaSAPI: Grant/Deny access
+    Note over Authorino: Authorization Phase
+    Authorino->>Authorino: OPA Rego Policy:<br/>Check auth.metadata.modelAccess.allowed
+    alt Access Allowed
+        Authorino->>Gateway: Authorized
+        Gateway->>Model: Forward request
+        Model-->>Gateway: Response
+        Gateway-->>User: Model response
+    else Access Denied
+        Authorino->>Gateway: 403 Forbidden
+        Gateway-->>User: 403 Forbidden
     end
-    
-    MaaSAPI-->>User: { "data": [models user can access] }
 ```
 
 ## Keycloak Token Structure
@@ -179,15 +184,90 @@ The tier lookup endpoint (`/v1/tiers/lookup`) matches user groups against the `t
 
 ## Authorization Check Mechanism
 
-The MaaS API performs authorization checks using an HTTP loopback approach:
+The Gateway AuthPolicy performs model authorization using metadata lookups:
 
-1. **Request**: MaaS API makes an internal HTTP request to the model endpoint
-2. **Gateway**: Request goes through Gateway with user's Keycloak token
-3. **AuthPolicy**: Gateway AuthPolicy validates the token
-4. **Response**: 
-   - `200/405`: Auth succeeded → Grant access
-   - `401/403`: Auth failed → Deny access
-   - `404`: For Keycloak tokens, treat as granted (token already validated by Gateway)
+### Tier Lookup Metadata (`matchedTier`)
+
+**Endpoint**: `POST /v1/tiers/lookup`  
+**Called by**: Gateway AuthPolicy metadata phase  
+**Purpose**: Determine user's subscription tier based on Keycloak group membership
+
+**Request**:
+```json
+{
+  "groups": ["tier-free-users", "tier-premium-users"]
+}
+```
+
+**Response**:
+```json
+{
+  "tier": "premium",
+  "displayName": "Premium Tier"
+}
+```
+
+**Caching**: 300 seconds per username (`auth.identity.preferred_username`)
+
+**Stored in**: `auth.metadata.matchedTier["tier"]`
+
+### Model Authorization Metadata (`modelAccess`)
+
+**Endpoint**: `POST /v1/models/authorize`  
+**Called by**: Gateway AuthPolicy metadata phase (only for `/llm/*` paths)  
+**Purpose**: Check if user's tier matches model's tier requirement
+
+**Request**:
+```json
+{
+  "path": "/llm/facebook-opt-125m-simulated/v1/chat/completions",
+  "tier": "free"
+}
+```
+
+**Response**:
+```json
+{
+  "allowed": true,
+  "reason": "user tier 'free' matches model's allowed tiers"
+}
+```
+
+**Authorization Logic**:
+1. Extract model name from path (`/llm/{model-name}/...`)
+2. Lookup `LLMInferenceService` by name across all namespaces
+3. Check `alpha.maas.opendatahub.io/tiers` annotation:
+   - Empty annotation or empty array → All tiers allowed
+   - Non-empty array → User's tier must be in the list
+4. Return `allowed: true/false` with optional reason
+
+**Caching**: Disabled (TTL: 0) for real-time authorization checks
+
+**Stored in**: `auth.metadata.modelAccess.allowed`
+
+### OPA Rego Authorization Policy
+
+The Gateway AuthPolicy uses OPA Rego to evaluate the `modelAccess` metadata:
+
+```rego
+package authz
+
+# Allow if this is NOT a model endpoint (maas-api routes, etc.)
+allow {
+  not startswith(input.request.path, "/llm/")
+}
+
+# Allow if this IS a model endpoint AND model access is allowed
+allow {
+  startswith(input.request.path, "/llm/")
+  input.auth.metadata.modelAccess.allowed == true
+}
+```
+
+**Evaluation**:
+- Non-model endpoints (`/maas-api/*`) → Always allowed
+- Model endpoints (`/llm/*`) → Allowed only if `modelAccess.allowed == true`
+- Returns `403 Forbidden` if authorization fails
 
 ## Configuration Files
 
@@ -259,7 +339,7 @@ kubectl logs -n kuadrant-system deployment/authorino | grep -i oidc
 
 ### Tier Lookup Failures
 
-**Symptom**: Models not appearing in list
+**Symptom**: Models not appearing in list or tier not determined
 
 **Check**:
 ```bash
@@ -268,19 +348,48 @@ kubectl get configmap tier-to-group-mapping -n opendatahub -o yaml
 
 # Check tier lookup endpoint
 kubectl logs -n opendatahub deployment/maas-api | grep -i tier
+
+# Test tier lookup directly
+curl -k -X POST "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/tiers/lookup" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"groups": ["tier-free-users"]}'
 ```
 
 ### Model Authorization Failures
 
-**Symptom**: `404 Not Found` during authorization check
+**Symptom**: `403 Forbidden` when accessing model endpoints
 
 **Check**:
 ```bash
-# Verify HTTPRoute exists
-kubectl get httproute -A | grep {model-name}
+# Verify LLMInferenceService exists and has tier annotation
+kubectl get llminferenceservice -A -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}{"\n"}{end}'
 
-# Check Gateway routing
-kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.listeners[*].attachedRoutes}'
+# Check model authorization endpoint logs
+kubectl logs -n opendatahub deployment/maas-api | grep -i "ModelAuthorize"
+
+# Test model authorization directly
+curl -k -X POST "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models/authorize" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"path": "/llm/facebook-opt-125m-simulated/v1/chat/completions", "tier": "free"}'
+```
+
+### TLS Certificate Issues
+
+**Symptom**: `x509: certificate signed by unknown authority` in Authorino logs when calling maas-api metadata endpoints
+
+**Description**: Authorino may fail to verify TLS certificates when calling internal maas-api endpoints for metadata lookups (`/v1/tiers/lookup` and `/v1/models/authorize`).
+
+**Solution**: Follow the TLS configuration instructions in the repository to configure Authorino with the appropriate CA bundle. See the deployment scripts for automated CA bundle configuration.
+
+**Check**:
+```bash
+# Check Authorino logs for TLS errors
+kubectl logs -n kuadrant-system deployment/authorino | grep -i "certificate\|tls\|x509"
+
+# Verify Authorino has CA bundle mounted
+kubectl get authorino authorino -n kuadrant-system -o jsonpath='{.spec.volumes}'
 ```
 
 ## Production Recommendations

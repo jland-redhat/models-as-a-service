@@ -15,9 +15,10 @@ spec:
     metadata:
       # Enriching identity metadata with a proper subscription tier based on user groups
       matchedTier:
+        priority: 0
         http:
           # TODO: network policy to limit access to this endpoint
-          url: http://maas-api.${MAAS_API_NAMESPACE}.svc.cluster.local:8080/v1/tiers/lookup
+          url: https://maas-api.${MAAS_API_NAMESPACE}.svc.cluster.local:8443/v1/tiers/lookup
           contentType: application/json
           method: POST
           body:
@@ -27,6 +28,29 @@ spec:
           key:
             selector: auth.identity.preferred_username
           ttl: 300
+      # Model authorization check - determines if user's tier matches model's tier requirement
+      # Note: This depends on matchedTier completing first, but we handle the case where it might not be available
+      modelAccess:
+        priority: 1
+        http:
+          url: https://maas-api.${MAAS_API_NAMESPACE}.svc.cluster.local:8443/v1/models/authorize
+          contentType: application/json
+          method: POST
+          body:
+            expression: |-
+              {
+                "path": request.path,
+                "tier": has(auth.metadata.matchedTier) ? auth.metadata.matchedTier["tier"] : ""
+              }
+        cache:
+          key:
+            selector: "{auth.identity.userid}:{request.path}"
+          ttl: 0
+        # Only check authorization for model endpoints
+        when:
+          - selector: request.path
+            operator: matches
+            value: "^/llm/.*"
     authentication:
       # Keycloak tokens for model access (PoC: Keycloak-only)
       keycloak:
@@ -39,11 +63,32 @@ spec:
           key:
             selector: context.request.http.headers.authorization.@case:lower
           ttl: 600
-    # Authorization removed for PoC - Gateway AuthPolicy already validates Keycloak tokens
-    # For production, add proper authorization using:
-    # - OPA Rego policies (authorization.tier-access.opa)
-    # - Kubernetes SubjectAccessReview (authorization.tier-access.kubernetesSubjectAccessReview)
-    # - Keycloak Authorization Services
+    authorization:
+      tier-access:
+        opa:
+          # Use OPA Rego to check the modelAccess metadata value
+          # Authorization is granted if auth.metadata.modelAccess.allowed is true
+          rego: |
+            package authz
+            
+            # Allow if this is NOT a model endpoint (maas-api routes, etc.)
+            allow {
+              not startswith(input.request.path, "/llm/")
+            }
+            
+            # Allow if this IS a model endpoint AND model access is allowed
+            # In Authorino OPA, we need to check if metadata exists and access it safely
+            allow {
+              startswith(input.request.path, "/llm/")
+              # Check if modelAccess metadata exists and allowed is true
+              # Using input.auth to access the auth context safely
+              input.auth.metadata.modelAccess.allowed == true
+            }
+        when:
+          # Only apply authorization to model endpoints (paths starting with /llm/)
+          - selector: request.path
+            operator: matches
+            value: "^/llm/.*"
     response:
       success:
         filters:
