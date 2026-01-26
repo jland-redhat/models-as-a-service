@@ -27,7 +27,7 @@ sequenceDiagram
     participant K8s as Kubernetes API
     participant Model
 
-    User->>Gateway: POST /maas-api/v1/tokens<br/>Authorization: Bearer {OpenShift Token}
+    User->>Gateway: POST /maas-api/v1/tokens\nAuthorization: Bearer {OpenShift Token}
     Gateway->>Authorino: Validate OpenShift Token
     Authorino->>K8s: TokenReview
     K8s-->>Authorino: User identity (username, groups)
@@ -41,7 +41,7 @@ sequenceDiagram
     K8s-->>MaaSAPI: ServiceAccount Token
     MaaSAPI-->>User: Minted Token (SA token)
     
-    User->>Gateway: GET /maas-api/v1/models<br/>Authorization: Bearer {SA Token}
+    User->>Gateway: GET /maas-api/v1/models\nAuthorization: Bearer {SA Token}
     Gateway->>Authorino: Validate SA Token
     Authorino->>K8s: TokenReview
     K8s-->>Authorino: SA identity
@@ -64,7 +64,7 @@ sequenceDiagram
     User->>Keycloak: Authenticate (username/password)
     Keycloak-->>User: Access Token (JWT)
     
-    User->>Gateway: POST /maas-api/v1/tokens<br/>Authorization: Bearer {Keycloak Token}
+    User->>Gateway: POST /maas-api/v1/tokens\nAuthorization: Bearer {Keycloak Token}
     Gateway->>Authorino: Validate Keycloak Token
     Authorino->>Keycloak: OIDC Discovery + JWT Validation
     Keycloak-->>Authorino: Token Valid (user identity)
@@ -73,7 +73,7 @@ sequenceDiagram
     MaaSAPI->>MaaSAPI: Use Keycloak token directly
     MaaSAPI-->>User: Minted Token (same Keycloak token)
     
-    User->>Gateway: GET /maas-api/v1/models<br/>Authorization: Bearer {Keycloak Token}
+    User->>Gateway: GET /maas-api/v1/models\nAuthorization: Bearer {Keycloak Token}
     Gateway->>Authorino: Validate Keycloak Token
     Authorino->>Keycloak: OIDC Discovery + JWT Validation
     Keycloak-->>Authorino: Token Valid
