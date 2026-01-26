@@ -98,7 +98,7 @@ You can also use the test script with a specific user:
    - Keycloak server deployment
    - Route configuration
 
-2. **Updated AuthPolicy** (`deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml.template`)
+2. **Updated AuthPolicy** (`deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml`)
    - OIDC authentication instead of Kubernetes TokenReview
    - Validates Keycloak tokens
    - Uses Kustomize templates with `envsubst` for dynamic configuration

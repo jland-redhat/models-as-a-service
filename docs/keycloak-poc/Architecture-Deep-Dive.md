@@ -193,7 +193,7 @@ The MaaS API performs authorization checks using an HTTP loopback approach:
 
 ### Gateway AuthPolicy
 
-**Location**: `deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml.template`
+**Location**: `deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml`
 
 **Key Settings**:
 - `authentication.keycloak.jwt.issuerUrl`: Keycloak realm URL (auto-substituted)
@@ -202,7 +202,7 @@ The MaaS API performs authorization checks using an HTTP loopback approach:
 
 ### MaaS API AuthPolicy
 
-**Location**: `deployment/overlays/keycloak/policies/maas-api-auth-policy.yaml.template`
+**Location**: `deployment/overlays/keycloak/policies/maas-api-auth-policy.yaml`
 
 **Key Settings**:
 - `authentication.keycloak.jwt.issuerUrl`: Keycloak realm URL
@@ -210,7 +210,7 @@ The MaaS API performs authorization checks using an HTTP loopback approach:
 
 ### MaaS API Deployment
 
-**Location**: `deployment/overlays/keycloak/maas-api-env-patch.yaml.template`
+**Location**: `deployment/overlays/keycloak/maas-api-env-patch.yaml`
 
 **Environment Variables**:
 - `KEYCLOAK_ENABLED=true`

@@ -525,7 +525,7 @@ fi
 
 # Apply the new Keycloak-only policy (this will replace/merge with existing)
 kubectl apply --server-side=true --force-conflicts -f <(envsubst '$KEYCLOAK_ISSUER_URL $MAAS_API_NAMESPACE' < \
-  "$PROJECT_ROOT/deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml.template")
+  "$PROJECT_ROOT/deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml")
 
 kubectl annotate authpolicy gateway-auth-policy -n openshift-ingress \
   opendatahub.io/managed=false --overwrite 2>/dev/null || true
@@ -572,7 +572,7 @@ fi
 
 # Apply the new AuthPolicy
 kubectl apply --server-side=true --force-conflicts -f <(envsubst '$KEYCLOAK_ISSUER_URL $MAAS_API_NAMESPACE' < \
-  "$PROJECT_ROOT/deployment/overlays/keycloak/policies/maas-api-auth-policy.yaml.template")
+  "$PROJECT_ROOT/deployment/overlays/keycloak/policies/maas-api-auth-policy.yaml")
 
 # Re-determine namespace after apply (in case it was created)
 if [ -z "$MAAS_API_AUTH_NAMESPACE" ]; then
@@ -627,7 +627,7 @@ fi
 # Apply maas-api deployment patch using envsubst
 echo "   Applying maas-api deployment configuration..."
 kubectl apply --server-side=true --force-conflicts -f <(envsubst '$MAAS_API_NAMESPACE $MAAS_API_IMAGE $KEYCLOAK_BASE_URL $KEYCLOAK_REALM $KEYCLOAK_CLIENT_ID $KEYCLOAK_CLIENT_SECRET $KEYCLOAK_AUDIENCE' < \
-  "$PROJECT_ROOT/deployment/overlays/keycloak/maas-api-env-patch.yaml.template")
+  "$PROJECT_ROOT/deployment/overlays/keycloak/maas-api-env-patch.yaml")
 
 # Set annotation on deployment
 kubectl annotate deployment maas-api -n "$MAAS_API_NAMESPACE" \

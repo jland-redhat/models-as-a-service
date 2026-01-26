@@ -211,8 +211,8 @@ kubectl rollout restart deployment/maas-api -n opendatahub
 4. **`maas-api/cmd/main.go`**
    - Keycloak manager initialization
 
-5. **`deployment/base/policies/auth-policies/gateway-auth-policy-keycloak.yaml`**
-   - OIDC authentication configuration
+5. **`deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml`**
+   - OIDC authentication configuration (with variable substitution)
 
 6. **`deployment/base/maas-api/policies/auth-policy.yaml`**
    - Keycloak token validation

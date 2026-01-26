@@ -32,7 +32,7 @@ User → OpenShift Token → maas-api → Keycloak Token Exchange → Keycloak T
 - Configuration via environment variables
 
 ### 3. AuthPolicy Updates
-- `gateway-auth-policy-keycloak.yaml`: OIDC-based authentication
+- `deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml`: OIDC-based authentication
 - Validates Keycloak tokens via OIDC discovery
 
 ## Deployment

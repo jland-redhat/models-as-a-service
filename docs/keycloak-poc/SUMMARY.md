@@ -13,7 +13,7 @@ This PoC demonstrates replacing Kubernetes ServiceAccount token minting with Key
 
 2. **Keycloak Integration Code**
    - `maas-api/internal/token/keycloak.go` - Keycloak token manager implementation
-   - `deployment/base/policies/auth-policies/gateway-auth-policy-keycloak.yaml` - OIDC AuthPolicy
+   - `deployment/overlays/keycloak/policies/gateway-auth-policy-keycloak.yaml` - OIDC AuthPolicy
 
 3. **Scripts**
    - `scripts/deploy-keycloak-poc.sh` - Consolidated Keycloak deployment and configuration
