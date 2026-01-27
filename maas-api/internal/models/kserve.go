@@ -26,7 +26,7 @@ type Manager struct {
 	tokenManager    tokenManagerInterface // Optional: for Keycloak admin SA token generation
 }
 
-// tokenManagerInterface defines the interface needed for getting admin SA tokens
+// tokenManagerInterface defines the interface needed for getting admin SA tokens.
 type tokenManagerInterface interface {
 	GetAdminServiceAccountToken(ctx context.Context, tierName string, ttl int) (string, error)
 	UseKeycloak() bool
@@ -42,7 +42,7 @@ func NewManager(
 	return NewManagerWithTokenManager(log, isvcLister, llmIsvcLister, httpRouteLister, gatewayRef, nil)
 }
 
-// NewManagerWithTokenManager creates a Manager with optional token manager for Keycloak admin SA support
+// NewManagerWithTokenManager creates a Manager with optional token manager for Keycloak admin SA support.
 func NewManagerWithTokenManager(
 	log *logger.Logger,
 	isvcLister kservelistersv1beta1.InferenceServiceLister,

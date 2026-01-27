@@ -103,13 +103,13 @@ func Load() *Config {
 		DBConnectionURL:  env.GetString("DB_CONNECTION_URL", ""),
 		DataPath:         env.GetString("DATA_PATH", DefaultDataPath),
 		// Deprecated env var (backward compatibility with pre-TLS version)
-		deprecatedHTTPPort: env.GetString("PORT", ""),
-		KeycloakEnabled:   func() bool { v, _ := env.GetBool("KEYCLOAK_ENABLED", false); return v }(),
-		KeycloakBaseURL:   env.GetString("KEYCLOAK_BASE_URL", ""),
-		KeycloakRealm:     env.GetString("KEYCLOAK_REALM", "maas"),
-		KeycloakClientID:  env.GetString("KEYCLOAK_CLIENT_ID", "maas-api"),
+		deprecatedHTTPPort:   env.GetString("PORT", ""),
+		KeycloakEnabled:      func() bool { v, _ := env.GetBool("KEYCLOAK_ENABLED", false); return v }(),
+		KeycloakBaseURL:      env.GetString("KEYCLOAK_BASE_URL", ""),
+		KeycloakRealm:        env.GetString("KEYCLOAK_REALM", "maas"),
+		KeycloakClientID:     env.GetString("KEYCLOAK_CLIENT_ID", "maas-api"),
 		KeycloakClientSecret: env.GetString("KEYCLOAK_CLIENT_SECRET", ""),
-		KeycloakAudience:  env.GetString("KEYCLOAK_AUDIENCE", "maas-model-access"),
+		KeycloakAudience:     env.GetString("KEYCLOAK_AUDIENCE", "maas-model-access"),
 	}
 
 	// Validate STORAGE_MODE env var through Set() to ensure consistent validation

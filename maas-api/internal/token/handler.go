@@ -79,8 +79,18 @@ func parseGroupsHeader(header string) ([]string, error) {
 // ExtractUserInfo extracts user information from headers set by the auth policy.
 func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		h.logger.Debug("ExtractUserInfo middleware called",
+			"path", c.Request.URL.Path,
+			"method", c.Request.Method,
+		)
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
+
+		h.logger.Debug("Headers received",
+			"username_header", username,
+			"group_header", groupHeader,
+			"all_headers", c.Request.Header,
+		)
 
 		// Validate required headers exist and are not empty
 		// Missing headers indicate a configuration issue with the auth policy (internal error)

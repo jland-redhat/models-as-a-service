@@ -14,13 +14,13 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-// AuthHandler handles model authorization requests from Gateway AuthPolicy
+// AuthHandler handles model authorization requests from Gateway AuthPolicy.
 type AuthHandler struct {
 	llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister
 	logger        *logger.Logger
 }
 
-// NewAuthHandler creates a new AuthHandler
+// NewAuthHandler creates a new AuthHandler.
 func NewAuthHandler(llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceLister, log *logger.Logger) *AuthHandler {
 	return &AuthHandler{
 		llmIsvcLister: llmIsvcLister,
@@ -28,10 +28,10 @@ func NewAuthHandler(llmIsvcLister kservelistersv1alpha1.LLMInferenceServiceListe
 	}
 }
 
-// AuthorizeRequest represents the authorization request from Gateway AuthPolicy
+// AuthorizeRequest represents the authorization request from Gateway AuthPolicy.
 type AuthorizeRequest struct {
-	Path string `json:"path" binding:"required"`
-	Tier string `json:"tier" binding:"required"`
+	Path string `binding:"required" json:"path"`
+	Tier string `binding:"required" json:"tier"`
 }
 
 // ModelAuthorize handles POST /v1/models/authorize

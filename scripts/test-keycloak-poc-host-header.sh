@@ -48,18 +48,36 @@ if [ -z "$CLUSTER_DOMAIN" ]; then
     exit 1
 fi
 
-HOST="maas.${CLUSTER_DOMAIN}"
+# Get Gateway hostname from spec (this is what the Gateway expects)
+HOST=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null || echo "")
+if [ -z "$HOST" ]; then
+    # Fallback to constructed hostname
+    HOST="maas.${CLUSTER_DOMAIN}"
+fi
 
-# Get Gateway address for Host header workaround
+# Get Gateway address for DNS resolution workaround
 GATEWAY_ADDRESS=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
 if [ -z "$GATEWAY_ADDRESS" ]; then
     echo "❌ Failed to get Gateway address"
     exit 1
 fi
 
+# Resolve Gateway address to IP for --resolve option
+GATEWAY_IP=$(getent hosts "$GATEWAY_ADDRESS" 2>/dev/null | awk '{print $1; exit}' || echo "")
+if [ -z "$GATEWAY_IP" ]; then
+    echo "⚠️  Warning: Could not resolve Gateway address to IP, DNS may fail"
+    echo "   Gateway Address: $GATEWAY_ADDRESS"
+    echo "   Using hostname directly: $HOST"
+    RESOLVE_OPTION=""
+else
+    # Use --resolve to force hostname to resolve to Gateway IP
+    RESOLVE_OPTION="--resolve ${HOST}:443:${GATEWAY_IP} --resolve ${HOST}:80:${GATEWAY_IP}"
+    echo "✅ Using DNS workaround: $HOST -> $GATEWAY_IP"
+fi
+
 echo "MaaS API Host: $HOST"
 echo "Gateway Address: $GATEWAY_ADDRESS"
-echo "⚠️  Using Host header workaround (DNS may not be resolved yet)"
+echo "Gateway IP: ${GATEWAY_IP:-N/A}"
 echo ""
 
 # Get Keycloak user token
@@ -96,13 +114,13 @@ echo ""
 
 # Test 1: Get Keycloak token from maas-api
 echo "2️⃣ Testing token minting via maas-api..."
-TOKEN_RESPONSE=$(curl -sSk \
+TOKEN_RESPONSE=$(curl -sSk ${RESOLVE_OPTION} \
   -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${USER_TOKEN}" \
   -H "Content-Type: application/json" \
   -X POST \
   -d '{"expiration": "1h"}' \
-  "https://${GATEWAY_ADDRESS}/maas-api/v1/tokens" || echo "")
+  "https://${HOST}/maas-api/v1/tokens" || echo "")
 
 if [ -z "$TOKEN_RESPONSE" ]; then
     echo "   ❌ Failed to get token response"
@@ -181,13 +199,13 @@ fi
 
 if [ "$USER_GROUPS" != "[]" ] && [ "$USER_GROUPS" != "null" ] && [ -n "$USER_GROUPS" ]; then
     echo "   User groups from token: $USER_GROUPS"
-    TIER_RESPONSE=$(curl -sSk \
+    TIER_RESPONSE=$(curl -sSk ${RESOLVE_OPTION} \
       -H "Host: ${HOST}" \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
       -X POST \
       -d "{\"groups\": $USER_GROUPS}" \
-      "https://${GATEWAY_ADDRESS}/maas-api/v1/tiers/lookup" 2>/dev/null || echo "")
+      "https://${HOST}/maas-api/v1/tiers/lookup" 2>/dev/null || echo "")
     
     if [ -n "$TIER_RESPONSE" ]; then
         TIER_NAME=$(echo "$TIER_RESPONSE" | jq -r '.tier // empty' 2>/dev/null || echo "")
@@ -213,10 +231,10 @@ echo ""
 
 # Test 3: Verify models endpoint requires authentication
 echo "4️⃣ Verifying models endpoint requires authentication..."
-NO_TOKEN_HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" \
+NO_TOKEN_HTTP_CODE=$(curl -sSk ${RESOLVE_OPTION} -o /dev/null -w "%{http_code}" \
   -H "Host: ${HOST}" \
   -H "Content-Type: application/json" \
-  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" 2>/dev/null || echo "000")
+  "https://${HOST}/maas-api/v1/models" 2>/dev/null || echo "000")
 
 if [ "$NO_TOKEN_HTTP_CODE" == "401" ] || [ "$NO_TOKEN_HTTP_CODE" == "403" ]; then
     echo "   ✅ Models endpoint correctly rejects requests without token (HTTP $NO_TOKEN_HTTP_CODE)"
@@ -230,19 +248,19 @@ echo ""
 
 # Test 4: Use token to access models endpoint
 echo "5️⃣ Testing model access with Keycloak token..."
-MODELS_RESPONSE=$(curl -sSk \
+MODELS_RESPONSE=$(curl -sSk ${RESOLVE_OPTION} \
   -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" || echo "")
+  "https://${HOST}/maas-api/v1/models" || echo "")
 
 echo "MODELS_RESPONSE: $MODELS_RESPONSE"
 
-HTTP_CODE=$(curl -sSk -o /dev/null -w "%{http_code}" \
+HTTP_CODE=$(curl -sSk ${RESOLVE_OPTION} -o /dev/null -w "%{http_code}" \
   -H "Host: ${HOST}" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
-  "https://${GATEWAY_ADDRESS}/maas-api/v1/models" || echo "000")
+  "https://${HOST}/maas-api/v1/models" || echo "000")
 
 if [ "$HTTP_CODE" == "200" ]; then
     echo "   ✅ Model access successful (HTTP $HTTP_CODE)"
@@ -283,14 +301,15 @@ if [ -n "$MODEL_ID" ] && [ "$MODEL_ID" != "null" ] && [ -n "$MODEL_URL" ] && [ "
     # Extract hostname from MODEL_URL and use Host header workaround
     MODEL_HOST=$(echo "$MODEL_URL" | sed -E 's|https?://([^/]+).*|\1|')
     MODEL_PATH=$(echo "$MODEL_URL" | sed -E 's|https?://[^/]+(.*)|\1|')
-    INFERENCE_RESPONSE=$(curl -sSk \
+    # Use same resolve option for model endpoint
+    INFERENCE_RESPONSE=$(curl -sSk ${RESOLVE_OPTION} \
       -H "Host: ${MODEL_HOST}" \
       -H "Authorization: Bearer ${TOKEN}" \
       -H "Content-Type: application/json" \
       -X POST \
       -d "$REQUEST_BODY" \
       -w "\nHTTP_STATUS:%{http_code}" \
-      "https://${GATEWAY_ADDRESS}${MODEL_PATH}/v1/chat/completions" 2>&1 || echo "")
+      "https://${HOST}${MODEL_PATH}/v1/chat/completions" 2>&1 || echo "")
     
     HTTP_STATUS=$(echo "$INFERENCE_RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
     RESPONSE_BODY=$(echo "$INFERENCE_RESPONSE" | sed '/HTTP_STATUS:/d')

@@ -121,7 +121,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		saToken = exchangedToken.Token
 	}
 
-	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken, user)
+	modelList, err := h.modelMgr.ListAvailableLLMs(c.Request.Context(), saToken)
 	if err != nil {
 		h.logger.Error("Failed to get available LLM models",
 			"error", err,

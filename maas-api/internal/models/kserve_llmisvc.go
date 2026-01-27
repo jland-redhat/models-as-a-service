@@ -35,8 +35,7 @@ type GatewayRef struct {
 }
 
 // ListAvailableLLMs lists LLM models that the user has access to based on authorization checks.
-// userContext is optional but required when using Keycloak to determine tier for admin SA token.
-func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string, userContext interface{}) ([]Model, error) {
+func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string) ([]Model, error) {
 	list, err := m.llmIsvcLister.List(labels.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list LLMInferenceServices: %w", err)
@@ -55,7 +54,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string, userCon
 	// Filter models based on user authorization
 	var authorizedModels []Model
 	for _, model := range allModels {
-		if m.userCanAccessModel(ctx, model, saToken, userContext) {
+		if m.userCanAccessModel(ctx, model, saToken) {
 			authorizedModels = append(authorizedModels, model)
 		}
 	}
@@ -65,8 +64,7 @@ func (m *Manager) ListAvailableLLMs(ctx context.Context, saToken string, userCon
 
 // userCanAccessModel checks if the user can access a specific model by making an authorization request.
 // Uses the HTTP loopback approach to leverage the gateway's AuthPolicy as the single source of truth.
-// userContext is optional but required when using Keycloak to get admin SA token for the user's tier.
-func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string, userContext interface{}) bool {
+func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken string) bool {
 	if model.URL == nil {
 		m.logger.Debug("Model URL is nil, denying access", "modelID", model.ID)
 		return false
@@ -79,9 +77,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 		Jitter:   0.1,
 	}
 
-	// Use /v1/chat/completions instead of /v1/models since HTTPRoute doesn't have /v1/models path
-	// We'll use OPTIONS method which should work for authorization check
-	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/chat/completions")
+	endpoint, errURL := url.JoinPath(model.URL.String(), "/v1/models")
 	if errURL != nil {
 		m.logger.Error("Failed to create endpoint", "modelID", model.ID, "model.URL", model.URL.String(), "errURL", errURL)
 		return false
@@ -89,7 +85,7 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 
 	lastResult := authDenied // fail-closed by default
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
-		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID, userContext)
+		lastResult = m.doAuthCheck(ctx, endpoint, saToken, model.ID)
 		return lastResult != authRetry, nil
 	}); err != nil {
 		m.logger.Debug("Authorization check backoff failed", "modelID", model.ID, "error", err)
@@ -100,12 +96,9 @@ func (m *Manager) userCanAccessModel(ctx context.Context, model Model, saToken s
 }
 
 // doAuthCheck performs a single authorization check attempt.
-// Uses OPTIONS /v1/chat/completions since HTTPRoute doesn't have /v1/models path.
-// OPTIONS method is used because it's a standard HTTP method that should work for authorization checks
-// without requiring a request body, and 405 Method Not Allowed indicates auth succeeded.
+// Uses GET /v1/models as it's a standard OpenAI-compatible endpoint supported by all inference servers.
 // For Keycloak: uses the user's Keycloak token directly (Gateway AuthPolicy validates it).
-// userContext is optional but required when using Keycloak to determine tier for admin SA token.
-func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string, userContext interface{}) authResult {
+func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelID string) authResult {
 	// For Keycloak: use the user's Keycloak token directly
 	// The Gateway AuthPolicy only accepts Keycloak tokens, so we can't use admin SA tokens
 	// The authorization check will verify the user's Keycloak token can access the model endpoint
@@ -118,9 +111,7 @@ func (m *Manager) doAuthCheck(ctx context.Context, authCheckURL, saToken, modelI
 		)
 	}
 
-	// Use OPTIONS method instead of GET - this works for authorization checks
-	// and 405 Method Not Allowed indicates auth succeeded (see comment below)
-	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, authCheckURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, authCheckURL, nil)
 	if err != nil {
 		m.logger.Debug("Failed to create authorization request", "modelID", modelID, "error", err)
 		return authRetry
@@ -210,6 +201,8 @@ func (m *Manager) partOfMaaSInstance(llmIsvc *kservev1alpha1.LLMInferenceService
 // determineTierFromGroups determines the tier name from user groups for PoC hack.
 // This is a simple heuristic: look for tier-{tierName}-users groups.
 // Returns "free" as default if no tier group is found.
+//
+//nolint:unused // Kept for future tier determination functionality
 func (m *Manager) determineTierFromGroups(groups []string) string {
 	// Look for tier-{tierName}-users pattern in groups
 	for _, group := range groups {

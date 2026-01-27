@@ -53,7 +53,7 @@ func NewManager(
 	}
 }
 
-// NewManagerWithKeycloak creates a manager with Keycloak support
+// NewManagerWithKeycloak creates a manager with Keycloak support.
 func NewManagerWithKeycloak(
 	log *logger.Logger,
 	tenantName string,
@@ -83,7 +83,7 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 
 	if m.useKeycloak {
 		if len(openshiftToken) == 0 || openshiftToken[0] == "" {
-			return nil, errors.New("Keycloak token required for token exchange")
+			return nil, errors.New("keycloak token required for token exchange")
 		}
 		return m.keycloakManager.GenerateToken(ctx, user, openshiftToken[0], expiration)
 	}
@@ -92,7 +92,7 @@ func (m *Manager) GenerateToken(ctx context.Context, user *UserContext, expirati
 	return m.generateServiceAccountToken(ctx, user, expiration)
 }
 
-// generateServiceAccountToken creates a Service Account token (original implementation)
+// generateServiceAccountToken creates a Service Account token (original implementation).
 func (m *Manager) generateServiceAccountToken(ctx context.Context, user *UserContext, expiration time.Duration) (*Token, error) {
 	log := m.logger.WithFields(
 		"expiration", expiration.String(),
@@ -313,7 +313,7 @@ func (m *Manager) createServiceAccountToken(ctx context.Context, namespace, saNa
 	return result, nil
 }
 
-// UseKeycloak returns whether Keycloak is enabled for this manager
+// UseKeycloak returns whether Keycloak is enabled for this manager.
 func (m *Manager) UseKeycloak() bool {
 	return m.useKeycloak
 }
@@ -342,9 +342,9 @@ func (m *Manager) GetAdminServiceAccountToken(ctx context.Context, tierName stri
 					Namespace: namespace,
 					Labels: map[string]string{
 						"app.kubernetes.io/name":       "maas-api",
-						"app.kubernetes.io/component":   "keycloak-admin",
-						"app.kubernetes.io/managed-by":  "maas-api",
-						"maas.opendatahub.io/tier":      tierName,
+						"app.kubernetes.io/component":  "keycloak-admin",
+						"app.kubernetes.io/managed-by": "maas-api",
+						"maas.opendatahub.io/tier":     tierName,
 					},
 				},
 			}

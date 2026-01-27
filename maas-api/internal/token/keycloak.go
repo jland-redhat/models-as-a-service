@@ -13,7 +13,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
-// KeycloakConfig holds Keycloak configuration
+// KeycloakConfig holds Keycloak configuration.
 type KeycloakConfig struct {
 	BaseURL      string
 	Realm        string
@@ -22,14 +22,14 @@ type KeycloakConfig struct {
 	Audience     string
 }
 
-// KeycloakTokenManager handles token minting via Keycloak token exchange
+// KeycloakTokenManager handles token minting via Keycloak token exchange.
 type KeycloakTokenManager struct {
 	config KeycloakConfig
 	client *http.Client
 	logger *logger.Logger
 }
 
-// NewKeycloakTokenManager creates a new Keycloak token manager
+// NewKeycloakTokenManager creates a new Keycloak token manager.
 func NewKeycloakTokenManager(config KeycloakConfig, log *logger.Logger) *KeycloakTokenManager {
 	if log == nil {
 		log = logger.Production()
@@ -43,7 +43,7 @@ func NewKeycloakTokenManager(config KeycloakConfig, log *logger.Logger) *Keycloa
 	}
 }
 
-// TokenExchangeRequest represents a Keycloak token exchange request
+// TokenExchangeRequest represents a Keycloak token exchange request.
 type TokenExchangeRequest struct {
 	SubjectToken       string `json:"subject_token"`
 	SubjectTokenType   string `json:"subject_token_type"`
@@ -52,7 +52,7 @@ type TokenExchangeRequest struct {
 	RequestedSubject   string `json:"requested_subject,omitempty"`
 }
 
-// TokenExchangeResponse represents a Keycloak token exchange response
+// TokenExchangeResponse represents a Keycloak token exchange response.
 type TokenExchangeResponse struct {
 	AccessToken     string `json:"access_token"`
 	TokenType       string `json:"token_type"`
@@ -61,8 +61,8 @@ type TokenExchangeResponse struct {
 	IssuedTokenType string `json:"issued_token_type"`
 }
 
-// GenerateToken creates a Keycloak token by using the user's existing token directly
-// The user's token already contains preferred_username and groups, so no exchange is needed
+// GenerateToken creates a Keycloak token by using the user's existing token directly.
+// The user's token already contains preferred_username and groups, so no exchange is needed.
 func (k *KeycloakTokenManager) GenerateToken(ctx context.Context, user *UserContext, userKeycloakToken string, expiration time.Duration) (*Token, error) {
 	log := k.logger.WithFields(
 		"username", user.Username,
@@ -120,8 +120,10 @@ func (k *KeycloakTokenManager) GenerateToken(ctx context.Context, user *UserCont
 	}, nil
 }
 
-// exchangeUserToken exchanges the user's Keycloak token for a new token with the correct audience
-// This preserves the user's identity (preferred_username, groups) in the exchanged token
+// exchangeUserToken exchanges the user's Keycloak token for a new token with the correct audience.
+// This preserves the user's identity (preferred_username, groups) in the exchanged token.
+//
+//nolint:unused // Kept for future token exchange functionality
 func (k *KeycloakTokenManager) exchangeUserToken(ctx context.Context, userToken string, expiration time.Duration) (string, int, error) {
 	tokenURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", k.config.BaseURL, k.config.Realm)
 
@@ -136,7 +138,7 @@ func (k *KeycloakTokenManager) exchangeUserToken(ctx context.Context, userToken 
 		data.Set("audience", k.config.Audience)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -166,8 +168,10 @@ func (k *KeycloakTokenManager) exchangeUserToken(ctx context.Context, userToken 
 	return tokenResp.AccessToken, expiresIn, nil
 }
 
-// getClientCredentialsToken gets a token from Keycloak using client credentials
-// This is kept for backward compatibility but should not be used for user tokens
+// getClientCredentialsToken gets a token from Keycloak using client credentials.
+// This is kept for backward compatibility but should not be used for user tokens.
+//
+//nolint:unused // Kept for backward compatibility
 func (k *KeycloakTokenManager) getClientCredentialsToken(ctx context.Context, expiration time.Duration) (string, int, error) {
 	tokenURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", k.config.BaseURL, k.config.Realm)
 
@@ -179,7 +183,7 @@ func (k *KeycloakTokenManager) getClientCredentialsToken(ctx context.Context, ex
 		data.Set("audience", k.config.Audience)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -209,8 +213,8 @@ func (k *KeycloakTokenManager) getClientCredentialsToken(ctx context.Context, ex
 	return tokenResp.AccessToken, expiresIn, nil
 }
 
-// RevokeTokens revokes tokens by invalidating them in Keycloak
-// For PoC, this is a placeholder - in production you'd use Keycloak's revocation endpoint
+// RevokeTokens revokes tokens by invalidating them in Keycloak.
+// For PoC, this is a placeholder - in production you'd use Keycloak's revocation endpoint.
 func (k *KeycloakTokenManager) RevokeTokens(ctx context.Context, user *UserContext) error {
 	// Keycloak doesn't support per-user token revocation easily
 	// In production, you'd need to:

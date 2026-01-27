@@ -167,6 +167,15 @@ else
 fi
 echo ""
 
+# Run configure-authorino-tls.sh to enable TLS listener
+echo "🔐 Running configure-authorino-tls.sh to enable TLS listener..."
+if [ -f "$PROJECT_ROOT/deployment/overlays/tls-backend/configure-authorino-tls.sh" ]; then
+    bash "$PROJECT_ROOT/deployment/overlays/tls-backend/configure-authorino-tls.sh"
+    echo "   ✅ Authorino TLS listener configuration complete"
+else
+    echo "   ⚠️  configure-authorino-tls.sh not found at expected path, skipping..."
+fi
+
 # Step 1: Deploy Keycloak
 # ============================================================================
 echo "1️⃣ Deploying Keycloak..."

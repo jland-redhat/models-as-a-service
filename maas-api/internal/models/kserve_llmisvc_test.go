@@ -261,7 +261,7 @@ func TestListAvailableLLMs_AlwaysAllowed(t *testing.T) {
 			)
 			require.NoError(t, errMgr)
 
-			availableModels, err := manager.ListAvailableLLMs(t.Context(), "any-token", nil)
+			availableModels, err := manager.ListAvailableLLMs(t.Context(), "any-token")
 			require.NoError(t, err)
 
 			var actualNames []string
@@ -317,7 +317,7 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 		)
 		require.NoError(t, errMgr)
 
-		authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "valid-token", nil)
+		authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "valid-token")
 		require.NoError(t, err)
 
 		assert.Len(t, authorizedModels, 1, "Expected 1 authorized model")
@@ -334,7 +334,7 @@ func TestListAvailableLLMs_Authorization(t *testing.T) {
 		)
 		require.NoError(t, errMgr)
 
-		authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "invalid-token", nil)
+		authorizedModels, err := manager.ListAvailableLLMs(t.Context(), "invalid-token")
 		require.NoError(t, err)
 
 		assert.Empty(t, authorizedModels, "Expected 0 authorized models for invalid token")
