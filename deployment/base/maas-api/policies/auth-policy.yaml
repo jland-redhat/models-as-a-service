@@ -9,14 +9,14 @@ spec:
     kind: HTTPRoute
     name: maas-api-route
   rules:
-    # Keycloak tokens only (Keycloak PoC)
     authentication:
-      keycloak:
-        jwt:
-          issuerUrl: https://keycloak-keycloak.apps.jland-test.zlz1.s1.devshift.org/realms/maas
+      openshift-identities:
+        kubernetesTokenReview:
+          audiences:
+            - openshift
         defaults:
           userid:
-            expression: auth.identity.preferred_username
+            expression: auth.identity.user.username
         cache:
           key:
             selector: context.request.http.headers.authorization.@case:lower
@@ -24,10 +24,6 @@ spec:
     response:
       success:
         headers:
-          # Keycloak identity fields
           X-MaaS-Username:
             plain:
-              selector: auth.identity.preferred_username
-          X-MaaS-Group:
-            plain:
-              selector: auth.identity.groups
+              selector: auth.identity.user.username
