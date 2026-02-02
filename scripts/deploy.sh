@@ -371,6 +371,9 @@ deploy_via_operator() {
   # Apply custom resources
   apply_custom_resources
 
+  # Deploy MaaS Gateway
+  deploy_maas_gateway
+
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
 
@@ -412,6 +415,9 @@ deploy_via_kustomize() {
   fi
 
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
+
+  # Deploy MaaS Gateway
+  deploy_maas_gateway
 
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
@@ -699,6 +705,75 @@ EOF
     "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
     120 \
     10 || log_warn "Kuadrant not ready yet - may need additional time for Gateway API provider initialization"
+}
+
+deploy_maas_gateway() {
+  log_info "Installing MaaS Gateway..."
+
+  local project_root
+  project_root="$(find_project_root)" || {
+    log_warn "Could not find project root, skipping Gateway deployment"
+    return 0
+  }
+
+  # Get cluster domain
+  local cluster_domain
+  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
+  
+  if [[ -z "$cluster_domain" ]]; then
+    log_warn "Could not detect cluster domain, Gateway deployment may fail"
+    cluster_domain=""
+  else
+    log_info "Detected cluster domain: $cluster_domain"
+  fi
+
+  # Detect TLS certificate name (optional)
+  local cert_name="${CERT_NAME:-}"
+  if [[ -z "$cert_name" ]]; then
+    # Try to detect certificate from router deployment
+    cert_name=$(kubectl get deployment router-default -n openshift-ingress-operator \
+      -o jsonpath='{.spec.template.spec.volumes[?(@.name=="tls-cert")].secret.secretName}' 2>/dev/null || echo "")
+    
+    if [[ -z "$cert_name" ]]; then
+      # Try alternative detection method
+      cert_name=$(kubectl get secret -n openshift-ingress \
+        -o jsonpath='{.items[?(@.metadata.annotations.cert-manager\.io/certificate-name)].metadata.name}' 2>/dev/null | head -n1 || echo "")
+    fi
+
+    if [[ -n "$cert_name" ]]; then
+      log_info "Detected TLS certificate: $cert_name"
+    else
+      log_info "No TLS certificate detected, Gateway will use HTTP only"
+    fi
+  else
+    log_info "Using provided TLS certificate: $cert_name"
+  fi
+
+  # Export variables for envsubst
+  export CLUSTER_DOMAIN="${cluster_domain}"
+  export CERT_NAME="${cert_name}"
+
+  log_info "Deploying maas-default-gateway..."
+  
+  local gateway_manifest="${project_root}/deployment/base/networking/maas/maas-gateway-api.yaml"
+  if [[ ! -f "$gateway_manifest" ]]; then
+    log_warn "Gateway manifest not found at $gateway_manifest, skipping Gateway deployment"
+    return 0
+  fi
+
+  # Apply Gateway with environment variable substitution
+  kubectl apply --server-side=true -f <(envsubst '$CLUSTER_DOMAIN $CERT_NAME' < "$gateway_manifest") || {
+    log_warn "Failed to deploy Gateway, continuing anyway..."
+    return 0
+  }
+
+  # Wait for Gateway to be programmed
+  log_info "Waiting for Gateway to be programmed..."
+  kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s 2>/dev/null || {
+    log_warn "Gateway not programmed yet, continuing anyway..."
+  }
+
+  log_info "MaaS Gateway deployment completed"
 }
 
 patch_operator_csv() {
