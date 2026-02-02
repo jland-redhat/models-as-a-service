@@ -377,15 +377,15 @@ deploy_via_operator() {
   # Install primary operator
   install_primary_operator
 
-  # Apply custom resources
-  apply_custom_resources
-
   # Deploy MaaS Gateway (if enabled)
   if [[ "$ENABLE_GATEWAY" == "true" ]]; then
     deploy_maas_gateway
   else
     log_info "Skipping MaaS Gateway deployment (--skip-gateway specified)"
   fi
+
+  # Apply custom resources
+  apply_custom_resources
 
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
@@ -767,32 +767,59 @@ deploy_maas_gateway() {
     return 0
   fi
 
-  # Build the Gateway manifest with kustomize and envsubst
+  # Build the Gateway manifest with kustomize
   # Use kustomize build (preferred method, matches reference script)
-  local gateway_manifest
+  local gateway_manifest_raw
   if command -v kustomize >/dev/null 2>&1; then
-    gateway_manifest=$(kustomize build "$gateway_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+    gateway_manifest_raw=$(kustomize build "$gateway_dir")
   elif kubectl kustomize --help >/dev/null 2>&1; then
     # Fallback to kubectl kustomize
-    gateway_manifest=$(kubectl kustomize "$gateway_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+    gateway_manifest_raw=$(kubectl kustomize "$gateway_dir")
   else
-    # Fallback to direct file with envsubst
+    # Fallback to direct file
     local gateway_file="${gateway_dir}/maas-gateway-api.yaml"
     if [[ ! -f "$gateway_file" ]]; then
       log_warn "Gateway manifest not found at $gateway_file, skipping Gateway deployment"
       return 0
     fi
-    gateway_manifest=$(envsubst '$CLUSTER_DOMAIN $CERT_NAME' < "$gateway_file")
+    gateway_manifest_raw=$(cat "$gateway_file")
   fi
 
-  # If CERT_NAME is empty, remove the HTTPS listener before applying
-  # An empty certificateRef will cause the Gateway to be rejected by the API
+  # If CERT_NAME is empty, remove the HTTPS listener BEFORE envsubst
+  # This prevents invalid YAML from being created (empty name field)
   if [[ -z "$cert_name" ]]; then
     log_info "No TLS certificate found, removing HTTPS listener from Gateway manifest..."
-    # Remove the HTTPS listener section using sed
-    # Match from "- name: https" until "mode: Terminate" (inclusive)
-    gateway_manifest=$(echo "$gateway_manifest" | sed '/- name: https/,/mode: Terminate/d')
+    # Remove the HTTPS listener section
+    # Use Python if available for proper YAML parsing, otherwise use sed
+    if command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" 2>/dev/null; then
+      gateway_manifest_raw=$(echo "$gateway_manifest_raw" | python3 -c "
+import sys
+import yaml
+
+try:
+    data = yaml.safe_load(sys.stdin)
+    if 'spec' in data and 'listeners' in data['spec']:
+        data['spec']['listeners'] = [
+            listener for listener in data['spec']['listeners']
+            if listener.get('name') != 'https'
+        ]
+    print(yaml.dump(data, default_flow_style=False, sort_keys=False))
+except Exception as e:
+    sys.stderr.write(f'Error processing YAML: {e}\n')
+    sys.exit(1)
+")
+    else
+      # Fallback to sed - match from listener item containing "name: https" to "mode: Terminate"
+      # Match the pattern more precisely to avoid removing HTTP listener
+      gateway_manifest_raw=$(echo "$gateway_manifest_raw" | sed '/^[[:space:]]*-[[:space:]]/,/^[[:space:]]*-[[:space:]]/{
+        /name:[[:space:]]*https/,/mode:[[:space:]]*Terminate/d
+      }' | sed '/name:[[:space:]]*https/,/mode:[[:space:]]*Terminate/d')
+    fi
   fi
+
+  # Now apply envsubst to substitute variables
+  local gateway_manifest
+  gateway_manifest=$(echo "$gateway_manifest_raw" | envsubst '$CLUSTER_DOMAIN $CERT_NAME')
 
   # Apply the Gateway manifest
   echo "$gateway_manifest" | kubectl apply --server-side=true -f - || {
