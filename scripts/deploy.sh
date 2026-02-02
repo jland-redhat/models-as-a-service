@@ -772,14 +772,41 @@ deploy_maas_gateway() {
 
   log_info "Deploying maas-default-gateway..."
   
-  local gateway_manifest="${project_root}/deployment/base/networking/maas/maas-gateway-api.yaml"
-  if [[ ! -f "$gateway_manifest" ]]; then
-    log_warn "Gateway manifest not found at $gateway_manifest, skipping Gateway deployment"
+  local gateway_dir="${project_root}/deployment/base/networking/maas"
+  if [[ ! -d "$gateway_dir" ]]; then
+    log_warn "Gateway directory not found at $gateway_dir, skipping Gateway deployment"
     return 0
   fi
 
-  # Apply Gateway with environment variable substitution
-  kubectl apply --server-side=true -f <(envsubst '$CLUSTER_DOMAIN $CERT_NAME' < "$gateway_manifest") || {
+  # Build the Gateway manifest with kustomize and envsubst
+  # Use kustomize build (preferred method, matches reference script)
+  local gateway_manifest
+  if command -v kustomize >/dev/null 2>&1; then
+    gateway_manifest=$(kustomize build "$gateway_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+  elif kubectl kustomize --help >/dev/null 2>&1; then
+    # Fallback to kubectl kustomize
+    gateway_manifest=$(kubectl kustomize "$gateway_dir" | envsubst '$CLUSTER_DOMAIN $CERT_NAME')
+  else
+    # Fallback to direct file with envsubst
+    local gateway_file="${gateway_dir}/maas-gateway-api.yaml"
+    if [[ ! -f "$gateway_file" ]]; then
+      log_warn "Gateway manifest not found at $gateway_file, skipping Gateway deployment"
+      return 0
+    fi
+    gateway_manifest=$(envsubst '$CLUSTER_DOMAIN $CERT_NAME' < "$gateway_file")
+  fi
+
+  # If CERT_NAME is empty, remove the HTTPS listener before applying
+  # An empty certificateRef will cause the Gateway to be rejected by the API
+  if [[ -z "$cert_name" ]]; then
+    log_info "No TLS certificate found, removing HTTPS listener from Gateway manifest..."
+    # Remove the HTTPS listener section using sed
+    # Match from "- name: https" until "mode: Terminate" (inclusive)
+    gateway_manifest=$(echo "$gateway_manifest" | sed '/- name: https/,/mode: Terminate/d')
+  fi
+
+  # Apply the Gateway manifest
+  echo "$gateway_manifest" | kubectl apply --server-side=true -f - || {
     log_warn "Failed to deploy Gateway, continuing anyway..."
     return 0
   }
