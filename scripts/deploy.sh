@@ -45,6 +45,7 @@ NAMESPACE="${NAMESPACE:-}"  # Auto-determined based on operator type
 SKIP_CERT_MANAGER="${SKIP_CERT_MANAGER:-auto}"
 SKIP_LWS="${SKIP_LWS:-auto}"
 ENABLE_TLS_BACKEND="${ENABLE_TLS_BACKEND:-true}"
+ENABLE_GATEWAY="${ENABLE_GATEWAY:-true}"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
@@ -89,6 +90,9 @@ OPTIONS:
 
   --skip-lws
       Skip LeaderWorkerSet installation (auto-detected by default)
+
+  --skip-gateway
+      Skip MaaS Gateway installation (default: enabled)
 
   --namespace <namespace>
       Target namespace for deployment
@@ -198,6 +202,10 @@ parse_arguments() {
         ;;
       --skip-lws)
         SKIP_LWS="true"
+        shift
+        ;;
+      --skip-gateway)
+        ENABLE_GATEWAY="false"
         shift
         ;;
       --namespace)
@@ -331,6 +339,7 @@ main() {
   log_info "  Rate Limiter: $RATE_LIMITER"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
+  log_info "  Gateway: $ENABLE_GATEWAY"
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -371,8 +380,12 @@ deploy_via_operator() {
   # Apply custom resources
   apply_custom_resources
 
-  # Deploy MaaS Gateway
-  deploy_maas_gateway
+  # Deploy MaaS Gateway (if enabled)
+  if [[ "$ENABLE_GATEWAY" == "true" ]]; then
+    deploy_maas_gateway
+  else
+    log_info "Skipping MaaS Gateway deployment (--skip-gateway specified)"
+  fi
 
   # Inject custom MaaS API image if specified
   inject_maas_api_image_operator_mode "$NAMESPACE"
@@ -416,8 +429,12 @@ deploy_via_kustomize() {
 
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
-  # Deploy MaaS Gateway
-  deploy_maas_gateway
+  # Deploy MaaS Gateway (if enabled)
+  if [[ "$ENABLE_GATEWAY" == "true" ]]; then
+    deploy_maas_gateway
+  else
+    log_info "Skipping MaaS Gateway deployment (--skip-gateway specified)"
+  fi
 
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
