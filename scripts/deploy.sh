@@ -744,26 +744,15 @@ deploy_maas_gateway() {
     log_info "Detected cluster domain: $cluster_domain"
   fi
 
-  # Detect TLS certificate name (optional)
-  local cert_name="${CERT_NAME:-}"
-  if [[ -z "$cert_name" ]]; then
-    # Try to detect certificate from router deployment
-    cert_name=$(kubectl get deployment router-default -n openshift-ingress-operator \
-      -o jsonpath='{.spec.template.spec.volumes[?(@.name=="tls-cert")].secret.secretName}' 2>/dev/null || echo "")
-    
-    if [[ -z "$cert_name" ]]; then
-      # Try alternative detection method
-      cert_name=$(kubectl get secret -n openshift-ingress \
-        -o jsonpath='{.items[?(@.metadata.annotations.cert-manager\.io/certificate-name)].metadata.name}' 2>/dev/null | head -n1 || echo "")
-    fi
-
-    if [[ -n "$cert_name" ]]; then
-      log_info "Detected TLS certificate: $cert_name"
-    else
-      log_info "No TLS certificate detected, Gateway will use HTTP only"
-    fi
+  # Detect TLS certificate name using helper function
+  log_info "Detecting TLS certificate secret..."
+  local cert_name
+  cert_name=$(detect_gateway_certificate)
+  
+  if [[ -n "$cert_name" ]]; then
+    log_info "Using TLS certificate: $cert_name"
   else
-    log_info "Using provided TLS certificate: $cert_name"
+    log_info "No TLS certificate detected, Gateway will use HTTP only"
   fi
 
   # Export variables for envsubst

@@ -1035,3 +1035,88 @@ wait_authorino_ready() {
   echo "  WARNING: Auth request verification timed out, continuing anyway"
   return 0
 }
+
+# ============================================================================
+# TLS Certificate Detection Functions
+# ============================================================================
+
+# detect_gateway_certificate
+#   Detects the TLS certificate secret name for Gateway deployment.
+#   Tries multiple methods in order of reliability:
+#   1. GatewayConfig (operator-managed, most reliable)
+#   2. Known certificate secret names (RHOAI/ODH defaults)
+#   3. Router deployment (fallback for default cluster cert)
+#
+# Usage:
+#   CERT_NAME=$(detect_gateway_certificate)
+#   echo "Certificate: ${CERT_NAME:-<none>}"
+#
+# Environment Variables:
+#   CERT_NAME - If set, this function will return it without detection
+#
+# Returns:
+#   Certificate secret name (or empty string if not found)
+#   Also exports CERT_NAME environment variable
+detect_gateway_certificate() {
+  local cert_name="${CERT_NAME:-}"
+
+  # If already set, return it
+  if [[ -n "$cert_name" ]]; then
+    echo "$cert_name"
+    return 0
+  fi
+
+  # Try 1: Get certificate from GatewayConfig (operator-managed, most reliable)
+  if kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway &>/dev/null; then
+    local gateway_cert_type
+    gateway_cert_type=$(kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway \
+      -o jsonpath='{.spec.certificate.type}' 2>/dev/null)
+
+    if [[ "$gateway_cert_type" == "Provided" ]]; then
+      cert_name=$(kubectl get gatewayconfig.services.platform.opendatahub.io default-gateway \
+        -o jsonpath='{.spec.certificate.secretName}' 2>/dev/null)
+      if [[ -n "$cert_name" ]]; then
+        log_info "Found certificate from GatewayConfig (Provided): ${cert_name}"
+      fi
+    elif [[ "$gateway_cert_type" == "OpenshiftDefaultIngress" ]]; then
+      # Try to get the default ingress certificate
+      cert_name=$(kubectl get ingresscontroller default -n openshift-ingress-operator \
+        -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)
+      if [[ -n "$cert_name" ]]; then
+        log_info "Found certificate from IngressController: ${cert_name}"
+      fi
+    fi
+  fi
+
+  # Try 2: Check known certificate secret names (RHOAI/ODH defaults)
+  if [[ -z "$cert_name" ]]; then
+    local cert_candidates=("data-science-gateway-service-tls" "default-gateway-cert")
+    for cert in "${cert_candidates[@]}"; do
+      if kubectl get secret -n openshift-ingress "$cert" &>/dev/null; then
+        cert_name="$cert"
+        log_info "Found TLS certificate secret in openshift-ingress: ${cert}"
+        break
+      fi
+    done
+  fi
+
+  # Try 3: Get certificate from router deployment (fallback for default cluster cert)
+  if [[ -z "$cert_name" ]]; then
+    cert_name=$(kubectl get deployment router-default -n openshift-ingress-operator \
+      -o jsonpath='{.spec.template.spec.volumes[?(@.name=="default-certificate")].secret.secretName}' 2>/dev/null)
+    if [[ -n "$cert_name" ]]; then
+      log_info "Found certificate from router deployment: ${cert_name}"
+    fi
+  fi
+
+  # Warning if no certificate found
+  if [[ -z "$cert_name" ]]; then
+    log_warn "No TLS certificate found. HTTPS listener will not be configured."
+    log_warn "You can specify a certificate with: --cert-name <secret-name>"
+    log_warn "Or set CERT_NAME environment variable."
+  fi
+
+  # Export for use in other functions
+  export CERT_NAME="$cert_name"
+  echo "$cert_name"
+}
