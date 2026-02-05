@@ -252,7 +252,7 @@ should_install_operator() {
   return 0
 }
 
-# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target
+# install_olm_operator operator_name namespace catalog_source channel starting_csv operatorgroup_target source_namespace
 #   Generic function to install an OLM operator.
 #
 # Arguments:
@@ -262,6 +262,7 @@ should_install_operator() {
 #   channel - Subscription channel (e.g., "fast-3")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
+#   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
 install_olm_operator() {
   local operator_name=${1?operator name is required}; shift
   local namespace=${1?namespace is required}; shift
@@ -269,6 +270,7 @@ install_olm_operator() {
   local channel=${1?channel is required}; shift
   local starting_csv=${1:-}; shift || true
   local operatorgroup_target=${1:-}; shift || true
+  local source_namespace=${1:-openshift-marketplace}; shift || true
 
   log_info "Installing operator: $operator_name in namespace: $namespace"
 
@@ -329,7 +331,7 @@ spec:
   channel: ${channel}
   name: ${operator_name}
   source: ${catalog_source}
-  sourceNamespace: openshift-marketplace
+  sourceNamespace: ${source_namespace}
 "
 
   if [[ -n "$starting_csv" ]]; then

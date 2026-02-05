@@ -625,7 +625,8 @@ EOF
         "$kuadrant_catalog" \
         "stable" \
         "" \
-        "AllNamespaces"
+        "AllNamespaces" \
+        "kuadrant-system"
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
       patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
