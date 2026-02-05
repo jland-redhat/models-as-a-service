@@ -165,13 +165,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		if len(groupNames) > 0 {
 			groupsFilterExpr = "auth.identity.user.groups.filter(g, " + groupOrExpr(groupNames) + ")"
 		}
+		// groups_str: comma-separated list so TokenRateLimitPolicy can use auth.identity.groups_str.split(",").exists(g, g == "group")
+		groupsStrExpr := groupsFilterExpr + `.join(",")`
 		rule["response"] = map[string]interface{}{
 			"success": map[string]interface{}{
 				"filters": map[string]interface{}{
 					"identity": map[string]interface{}{
 						"json": map[string]interface{}{
 							"properties": map[string]interface{}{
-								"groups": map[string]interface{}{"expression": groupsFilterExpr},
+								"groups":     map[string]interface{}{"expression": groupsFilterExpr},
+								"groups_str": map[string]interface{}{"expression": groupsStrExpr},
 								"userid": map[string]interface{}{
 									"expression": "auth.identity.user.username", "selector": "auth.identity.userid",
 								},

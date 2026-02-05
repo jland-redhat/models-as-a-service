@@ -152,8 +152,8 @@ func (r *MaaSSubscriptionReconciler) reconcileTokenRateLimitPolicies(ctx context
 
 		var groupChecks []string
 		for _, group := range subscription.Spec.Owner.Groups {
-			// CEL: double-quoted string literal for "in" check (see example-tokenratepolicy.yaml)
-			groupChecks = append(groupChecks, fmt.Sprintf(`"%s" in auth.identity.user.groups`, group.Name))
+			// Use comma-separated groups_str from AuthPolicy response: auth.identity.groups_str.split(",").exists(g, g == "group")
+			groupChecks = append(groupChecks, fmt.Sprintf(`auth.identity.groups_str.split(",").exists(g, g == "%s")`, group.Name))
 		}
 
 		var userChecks []string
