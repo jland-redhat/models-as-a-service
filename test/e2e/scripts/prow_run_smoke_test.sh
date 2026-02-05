@@ -138,14 +138,16 @@ deploy_maas_platform() {
         exit 1
     fi
     # Wait for DataScienceCluster's KServe and ModelsAsService to be ready
-    if ! wait_datasciencecluster_ready "default-dsc" 600; then
+    # Using 300s timeout to fit within Prow's 15m job limit
+    if ! wait_datasciencecluster_ready "default-dsc" 300; then
         echo "❌ ERROR: DataScienceCluster components did not become ready"
         exit 1
     fi
     
     # Wait for Authorino to be ready and auth service cluster to be healthy
+    # Using 300s timeout to fit within Prow's 15m job limit
     echo "Waiting for Authorino and auth service to be ready..."
-    if ! wait_authorino_ready 600; then
+    if ! wait_authorino_ready 300; then
         echo "⚠️  WARNING: Authorino readiness check had issues, continuing anyway"
     fi
     
@@ -186,8 +188,8 @@ validate_deployment() {
     echo "Deployment Validation"
     if [ "$SKIP_VALIDATION" = false ]; then
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "⚠️  First validation attempt failed, waiting 60 seconds and retrying..."
-            sleep 60
+            echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
+            sleep 30
             if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
