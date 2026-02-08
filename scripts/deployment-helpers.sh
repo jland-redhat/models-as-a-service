@@ -716,34 +716,71 @@ wait_authorino_ready() {
 
   # Finally, verify auth requests are actually succeeding (not just cluster marked healthy)
   echo "  - Verifying auth requests are succeeding..."
-  local cluster_domain
-  cluster_domain=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
-  
-  if [[ -z "$cluster_domain" ]]; then
-    echo "  WARNING: Could not determine cluster domain, skipping request verification"
-    return 0
+
+  # Get gateway URL from the gateway spec (aligned with verify-models-and-limits.sh)
+  local maas_url=""
+  local https_hostname
+  https_hostname=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+    -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+
+  if [[ -n "$https_hostname" ]]; then
+    maas_url="https://${https_hostname}/maas-api/health"
+  else
+    local http_hostname
+    http_hostname=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+      -o jsonpath='{.spec.listeners[?(@.protocol=="HTTP")].hostname}' 2>/dev/null | awk '{print $1}')
+
+    if [[ -n "$http_hostname" ]]; then
+      maas_url="http://${http_hostname}/maas-api/health"
+    fi
   fi
 
-  local maas_url="https://maas.${cluster_domain}/maas-api/health"
+  if [[ -z "$maas_url" ]]; then
+    echo "  WARNING: Could not determine gateway URL, skipping request verification"
+    return 0
+  fi
   local consecutive_success=0
   local required_success=3
 
   while [[ $elapsed -lt $timeout ]]; do
     # Make a test request - we expect 401 (auth working) not 500 (auth failing)
+    # Capture both response body and HTTP code
+    local response_file
+    response_file=$(mktemp)
     local http_code
-    http_code=$(curl -sSk -o /dev/null -w "%{http_code}" "$maas_url" 2>/dev/null || echo "000")
-    
+    http_code=$(curl -sSk -o "$response_file" -w "%{http_code}" "$maas_url" 2>&1)
+
+    # If http_code is not a 3-digit number, curl failed
+    if ! [[ "$http_code" =~ ^[0-9]{3}$ ]]; then
+      local curl_error="$http_code"
+      http_code="000"
+    fi
+
     if [[ "$http_code" == "401" || "$http_code" == "200" ]]; then
       consecutive_success=$((consecutive_success + 1))
       echo "  - Auth request succeeded (HTTP $http_code) [$consecutive_success/$required_success]"
-      
+      rm -f "$response_file"
+
       if [[ $consecutive_success -ge $required_success ]]; then
         echo "  * Auth requests verified working"
         return 0
       fi
     else
       consecutive_success=0
-      echo "  - Auth request returned HTTP $http_code, waiting for stabilization..."
+      if [[ "$http_code" == "000" ]]; then
+        # Show actual curl error
+        local error_msg
+        error_msg=$(echo "$curl_error" | head -1 | sed 's/^curl: ([0-9]*) //')
+        echo "  - Auth request failed: ${error_msg:-Connection failed}"
+      elif [[ "$http_code" == "500" || "$http_code" == "502" || "$http_code" == "503" ]]; then
+        # Show response body for server errors
+        local error_body
+        error_body=$(cat "$response_file" 2>/dev/null | head -c 200 | tr '\n' ' ')
+        echo "  - Auth request returned HTTP $http_code: ${error_body:-no details}"
+      else
+        echo "  - Auth request returned HTTP $http_code, waiting for stabilization..."
+      fi
+      rm -f "$response_file"
     fi
     
     sleep 2
