@@ -193,7 +193,6 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)
 
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
-	// Per TECHNICAL_ARCHITECTURE.md §4.4
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 
