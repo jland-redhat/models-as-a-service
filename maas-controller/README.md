@@ -115,7 +115,7 @@ All commands below are meant to be run from the **repository root** (the directo
 Deploy the entire MaaS stack including the subscription controller in one command:
 
 ```bash
-./scripts/deploy.sh -t odh --enable-subscriptions
+./scripts/deploy.sh --operator-type odh --enable-subscriptions
 ```
 
 This installs all infrastructure (cert-manager, LWS, Kuadrant, ODH, gateway, policies)
