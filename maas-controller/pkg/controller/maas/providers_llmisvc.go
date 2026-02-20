@@ -131,7 +131,7 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 	if endpoint == "" {
 		endpoint, err = h.GetModelEndpoint(ctx, log, model)
 		if err != nil {
-			return "", false, nil
+			return "", false, err
 		}
 	}
 	return endpoint, true, nil

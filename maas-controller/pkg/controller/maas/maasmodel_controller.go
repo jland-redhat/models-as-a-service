@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -148,87 +147,6 @@ func (r *MaaSModelReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	return ctrl.Result{}, nil
 }
 
-func (r *MaaSModelReconciler) createOrUpdateHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
-	routeName := fmt.Sprintf("maas-model-%s", model.Name)
-	route := &gatewayapiv1.HTTPRoute{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      routeName,
-			Namespace: model.Namespace,
-		},
-	}
-
-	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, route, func() error {
-		// Set owner reference
-		if err := controllerutil.SetControllerReference(model, route, r.Scheme); err != nil {
-			return err
-		}
-
-		// Determine namespace for backend service
-		backendNS := model.Namespace
-		if model.Spec.ModelRef.Namespace != "" {
-			backendNS = model.Spec.ModelRef.Namespace
-		}
-
-		// Build HTTPRoute spec
-		// This routes requests to the model endpoint
-		gatewayNS := r.gatewayNamespace()
-		route.Spec = gatewayapiv1.HTTPRouteSpec{
-			CommonRouteSpec: gatewayapiv1.CommonRouteSpec{
-				ParentRefs: []gatewayapiv1.ParentReference{
-					{
-						Name:      gatewayapiv1.ObjectName(r.gatewayName()),
-						Namespace: (*gatewayapiv1.Namespace)(&gatewayNS),
-					},
-				},
-			},
-			Hostnames: []gatewayapiv1.Hostname{
-				"maas.*", // Match any hostname under maas domain
-			},
-			Rules: []gatewayapiv1.HTTPRouteRule{
-				{
-					Matches: []gatewayapiv1.HTTPRouteMatch{
-						{
-							Path: &gatewayapiv1.HTTPPathMatch{
-								Type:  ptr.To(gatewayapiv1.PathMatchPathPrefix),
-								Value: ptr.To(fmt.Sprintf("/%s", model.Name)),
-							},
-						},
-					},
-					BackendRefs: []gatewayapiv1.HTTPBackendRef{
-						{
-							BackendRef: gatewayapiv1.BackendRef{
-								BackendObjectReference: gatewayapiv1.BackendObjectReference{
-									Group:     ptr.To(gatewayapiv1.Group("")),
-									Kind:      ptr.To(gatewayapiv1.Kind("Service")),
-									Name:      gatewayapiv1.ObjectName(model.Spec.ModelRef.Name),
-									Namespace: ptr.To(gatewayapiv1.Namespace(backendNS)),
-									Port:      ptr.To(gatewayapiv1.PortNumber(8080)),
-								},
-							},
-						},
-					},
-				},
-			},
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return fmt.Errorf("failed to create/update HTTPRoute: %w", err)
-	}
-
-	if op != controllerutil.OperationResultNone {
-		log.Info("HTTPRoute reconciled", "operation", op, "name", routeName)
-	}
-
-	// Update status with HTTPRoute information
-	model.Status.HTTPRouteName = routeName
-	model.Status.HTTPRouteNamespace = model.Namespace
-
-	return nil
-}
-
 func (r *MaaSModelReconciler) handleDeletion(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(model, maasModelFinalizer) {
 		// Clean up generated AuthPolicies for this model
@@ -328,6 +246,7 @@ func (r *MaaSModelReconciler) updateStatusWithReason(ctx context.Context, model 
 	if err := r.Status().Update(ctx, model); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSModel status", "name", model.Name)
+		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
 	}
 }
 
@@ -343,8 +262,8 @@ func (r *MaaSModelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapHTTPRouteToMaaSModels returns reconcile requests for all MaaSModels that
-// reference an LLMInferenceService in the same namespace as the HTTPRoute.
+// mapHTTPRouteToMaaSModels returns reconcile requests for all MaaSModels whose
+// route namespace (ModelRef.Namespace or MaaSModel.Namespace) matches the HTTPRoute's namespace.
 func (r *MaaSModelReconciler) mapHTTPRouteToMaaSModels(ctx context.Context, obj client.Object) []reconcile.Request {
 	route, ok := obj.(*gatewayapiv1.HTTPRoute)
 	if !ok {

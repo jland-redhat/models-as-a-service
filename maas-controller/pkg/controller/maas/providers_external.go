@@ -32,23 +32,16 @@ type externalModelHandler struct {
 	r *MaaSModelReconciler
 }
 
-// ReconcileRoute creates or updates the HTTPRoute for an external model.
+// ReconcileRoute validates the user-supplied HTTPRoute for an external model and populates status.
 //
 // Current behaviour: returns ErrKindNotImplemented so the controller marks the model as Unsupported.
 //
-// To implement:
-//  1. Define or reuse a CRD for external model config (e.g. URL, auth, TLS). You may add
-//     fields to ModelReference in the API for ExternalModel (e.g. URL, CACertSecretRef).
-//  2. Create or update an HTTPRoute in model.Namespace named "maas-model-<model.Name>" that:
-//     - References r.gatewayName() / r.gatewayNamespace() in ParentRefs.
-//     - Has a path match prefix "/<model.Name>".
-//     - Has a single BackendRef to the external URL (use Gateway API BackendRef to an
-//     ExternalName Service or a custom backend type, depending on your gateway implementation).
-//  3. Use controllerutil.CreateOrUpdate with the HTTPRoute and SetControllerReference(model, route, r.Scheme).
-//  4. Populate model.Status with HTTPRouteName, HTTPRouteNamespace, HTTPRouteGatewayName,
-//     HTTPRouteGatewayNamespace, and HTTPRouteHostnames (from the route or gateway) so that
-//     Status() and discovery can derive the endpoint later.
-//  5. Return nil on success; the controller will then call Status().
+// To implement: Users supply the HTTPRoute (the controller does not create it). ReconcileRoute should:
+//  1. Resolve the HTTPRoute name/namespace from model spec (e.g. ModelReference or new ExternalModel-specific fields).
+//  2. Get the HTTPRoute and validate it references the configured gateway (r.gatewayName() / r.gatewayNamespace()).
+//  3. Populate model.Status with HTTPRouteName, HTTPRouteNamespace, HTTPRouteGatewayName,
+//     HTTPRouteGatewayNamespace, and HTTPRouteHostnames so Status() and discovery can derive the endpoint.
+//  4. Return nil on success; the controller will then call Status().
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
 	return fmt.Errorf("%w: ExternalModel", ErrKindNotImplemented)
 }
@@ -58,10 +51,10 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 // Current behaviour: returns ErrKindNotImplemented so the controller marks the model as Unsupported.
 //
 // To implement:
-//  1. After ReconcileRoute has created/updated the HTTPRoute, read the route or gateway (e.g.
+//  1. After ReconcileRoute has validated the user-supplied HTTPRoute and set status, read the route or gateway (e.g.
 //     r.Get(ctx, gatewayKey, gateway)) to get a hostname or address.
 //  2. Build the endpoint URL (e.g. "https://<hostname>/<model.Name>"). Prefer model.Status.HTTPRouteHostnames
-//     if ReconcileRoute already set it from the HTTPRoute.
+//     if ReconcileRoute set it from the HTTPRoute.
 //  3. Optionally probe the external endpoint (HTTP GET/HEAD) to determine ready. If you do not
 //     probe, you can return (endpoint, true, nil) once the HTTPRoute is in place.
 //  4. Return (endpoint, ready, nil). The controller will set model.Status.Endpoint and Phase
@@ -78,20 +71,17 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 
 // CleanupOnDelete is called when the MaaSModel is deleted.
 //
-// Current behaviour: no-op (no HTTPRoute is created yet).
+// Current behaviour: no-op.
 //
-// To implement:
-//  1. Look up the HTTPRoute created by ReconcileRoute (name "maas-model-<model.Name>", namespace model.Namespace).
-//  2. If found, delete it (r.Delete(ctx, route)). Ignore NotFound. The controller will only call
-//     this for kinds that create their own route (unlike llmisvc, where the route is owned by KServe).
+// ExternalModel: the HTTPRoute is user-supplied, so the controller does not delete it. No implementation needed.
 func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModel) error {
 	return nil
 }
 
 // externalModelRouteResolver returns the HTTPRoute name/namespace for ExternalModel.
 // Used by findHTTPRouteForModel and by AuthPolicy/Subscription controllers to attach policies.
-// When ReconcileRoute is implemented, the controller creates the route with this name/namespace,
-// so this resolver stays as-is.
+// Users supply the HTTPRoute; when implemented, resolve name/namespace from model spec (e.g. status or ModelReference fields).
+// This default assumes a convention of "maas-model-<model.Name>" in model.Namespace until the API supports an explicit route ref.
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModel) (routeName, routeNamespace string, err error) {

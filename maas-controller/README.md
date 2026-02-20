@@ -50,8 +50,8 @@ MaaSModel's `spec.modelRef.kind` selects how the controller discovers and expose
 
 | Kind (CRD value) | Behaviour |
 |------------------|-----------|
-| **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. Path prefix for CEL is the model ref namespace (or MaaSModel namespace). |
-| **ExternalModel** | Stub: not yet implemented. Controller sets status **Phase=Failed** and condition **Reason=Unsupported**. Implementation notes live in `providers_external.go`. |
+| **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. |
+| **ExternalModel** | Stub: not yet implemented. Controller sets status **Phase=Failed** and condition **Reason=Unsupported**. When implemented, users supply the HTTPRoute (controller does not create it); see `providers_external.go`. |
 
 The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodel_types.go`). The registry accepts **LLMInferenceService** (and the alias **llmisvc** for backwards compatibility). Use `kind: LLMInferenceService` in MaaSModel specs.
 
