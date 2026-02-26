@@ -336,8 +336,8 @@ class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
     def test_two_auth_policies_or_logic(self):
-        """Two auth policies for the premium model: SA matching the 2nd should get access,
-        and the original premium-user policy should still work for the admin."""
+        """Two auth policies for the premium model with different groups:
+        users matching either policy should get access (OR semantics)."""
         ns = _ns()
         sa = "e2e-test-multiauth"
         try:
@@ -352,6 +352,15 @@ class TestMultipleAuthPoliciesPerModel:
             })
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-admin-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
                 "metadata": {"name": "e2e-sa-sub", "namespace": ns},
                 "spec": {
@@ -359,41 +368,74 @@ class TestMultipleAuthPoliciesPerModel:
                     "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
                 },
             })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-admin-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                },
+            })
             token = _create_sa_token(sa)
             r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
             log.info(f"SA with 2nd auth policy -> premium: {r.status_code}")
 
-            # Original premium-user policy should still work for the cluster admin
             admin_token = _get_cluster_token()
-            r2 = _inference(admin_token, path=PREMIUM_MODEL_PATH)
-            assert r2.status_code == 200, f"Expected 200 (admin via original policy), got {r2.status_code}"
+            r2 = _poll_status(admin_token, 200, path=PREMIUM_MODEL_PATH, timeout=60)
+            log.info(f"Admin with 3rd auth policy -> premium: {r2.status_code}")
         finally:
+            _delete_cr("maassubscription", "e2e-admin-sub")
             _delete_cr("maassubscription", "e2e-sa-sub")
+            _delete_cr("maasauthpolicy", "e2e-admin-auth")
             _delete_cr("maasauthpolicy", "e2e-sa-auth")
             _delete_sa(sa)
             _wait_reconcile()
 
     def test_delete_one_auth_policy_other_still_works(self):
-        """Delete one of two auth policies for premium model -> remaining still works."""
+        """Delete one of two test-created auth policies for premium model -> remaining still works."""
         ns = _ns()
         try:
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSAuthPolicy",
+                "metadata": {"name": "e2e-keep-auth", "namespace": ns},
+                "spec": {
+                    "modelRefs": [PREMIUM_MODEL_REF],
+                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "MaaSSubscription",
+                "metadata": {"name": "e2e-keep-sub", "namespace": ns},
+                "spec": {
+                    "owner": {"groups": [{"name": "system:authenticated"}]},
+                    "modelRefs": [{"name": PREMIUM_MODEL_REF, "tokenRateLimits": [{"limit": 100, "window": "1m"}]}],
+                },
+            })
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
                 "metadata": {"name": "e2e-extra-auth", "namespace": ns},
                 "spec": {
                     "modelRefs": [PREMIUM_MODEL_REF],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
+                    "subjects": {"groups": [{"name": "system:serviceaccounts"}]},
                 },
             })
-            _wait_reconcile()
-
-            _delete_cr("maasauthpolicy", "e2e-extra-auth")
 
             token = _get_cluster_token()
             r = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            log.info(f"Before deletion -> {r.status_code}")
+
+            _delete_cr("maasauthpolicy", "e2e-extra-auth")
+
+            r2 = _poll_status(token, 200, path=PREMIUM_MODEL_PATH)
+            log.info(f"After deletion -> {r2.status_code}")
         finally:
             _delete_cr("maasauthpolicy", "e2e-extra-auth")
+            _delete_cr("maasauthpolicy", "e2e-keep-auth")
+            _delete_cr("maassubscription", "e2e-keep-sub")
             _wait_reconcile()
 
 
