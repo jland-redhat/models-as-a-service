@@ -9,13 +9,11 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
 	modelMgr           *models.Manager
-	tokenManager       *token.Manager
 	logger             *logger.Logger
 	maasModelRefLister models.MaaSModelRefLister
 	maasModelNamespace string
@@ -23,16 +21,12 @@ type ModelsHandler struct {
 
 // NewModelsHandler creates a new models handler.
 // GET /v1/models lists models from the MaaSModelRef lister when set; otherwise the list is empty.
-func NewModelsHandler(
-	log *logger.Logger, modelMgr *models.Manager, tokenMgr *token.Manager,
-	maasModelRefLister models.MaaSModelRefLister, maasModelNamespace string,
-) *ModelsHandler {
+func NewModelsHandler(log *logger.Logger, modelMgr *models.Manager, maasModelRefLister models.MaaSModelRefLister, maasModelNamespace string) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &ModelsHandler{
 		modelMgr:           modelMgr,
-		tokenManager:       tokenMgr,
 		logger:             log,
 		maasModelRefLister: maasModelRefLister,
 		maasModelNamespace: maasModelNamespace,
