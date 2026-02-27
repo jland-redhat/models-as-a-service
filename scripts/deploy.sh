@@ -564,6 +564,15 @@ deploy_via_kustomize() {
   log_info "Applying kustomize manifests..."
   kubectl apply --server-side=true -f <(kustomize build "$overlay")
 
+  # The kustomize namespace override moves ALL resources into $NAMESPACE,
+  # but gateway-default-auth AuthPolicy must live in the gateway's namespace
+  # (openshift-ingress) so Kuadrant can match it to the Gateway target.
+  local gw_auth_policy="$project_root/maas-controller/config/policies/gateway-default-auth.yaml"
+  if [[ -f "$gw_auth_policy" ]]; then
+    log_info "Re-applying gateway-default-auth to its declared namespace (openshift-ingress)..."
+    kubectl apply --server-side=true -f "$gw_auth_policy"
+  fi
+
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend

@@ -29,6 +29,11 @@ rules:
   resources: ["maasmodels", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
 
+# LLMInferenceService (cached via informer for model discovery)
+- apiGroups: ["serving.kserve.io"]
+  resources: ["llminferenceservices"]
+  verbs: ["get", "list", "watch"]
+
 # HTTPRoutes (for future use, e.g. listing or resolving model routes)
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["httproutes"]

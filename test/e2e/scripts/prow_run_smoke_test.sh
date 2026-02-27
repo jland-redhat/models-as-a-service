@@ -445,6 +445,21 @@ deploy_models
 print_header "Setting up variables for tests"
 setup_vars_for_tests
 
+# Ensure the current user is in the premium-user group so subscription tests
+print_header "Setting up premium-user group"
+current_user=$(oc whoami)
+if ! oc get group premium-user >/dev/null 2>&1; then
+    echo "Creating 'premium-user' group..."
+    oc adm groups new premium-user
+fi
+if ! oc get group premium-user -o jsonpath='{.users}' | grep -q "$current_user"; then
+    echo "Adding '$current_user' to 'premium-user' group..."
+    oc adm groups add-users premium-user "$current_user"
+else
+    echo "User '$current_user' already in 'premium-user' group"
+fi
+echo "✅ premium-user group setup completed"
+
 run_subscription_tests
 
 # Setup all users first (while logged in as admin)

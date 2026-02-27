@@ -60,6 +60,8 @@ def _gateway_url():
 
 
 def _get_cluster_token():
+    user = subprocess.run(["oc", "whoami"], capture_output=True, text=True).stdout.strip()
+    log.info(f"Getting cluster token for {user}")
     result = subprocess.run(["oc", "whoami", "-t"], capture_output=True, text=True)
     token = result.stdout.strip()
     if not token:

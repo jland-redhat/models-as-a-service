@@ -100,15 +100,24 @@ export TOKEN
 # Log a masked preview of the token to the log (not the console)
 echo "[token] minted: len=$((${#TOKEN})) head=${TOKEN:0:12}…tail=${TOKEN: -8}" >> "${LOG}"
 
-# 2) Get models, derive URL/ID if catalog returns them
-MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" || true)"
-MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
-MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
+# 2) Get models, derive URL/ID if catalog returns them (retry for transient empty cache)
+MODEL_ID=""
+for _attempt in $(seq 1 10); do
+  MODELS_JSON="$(curl -skS -H "Authorization: Bearer ${TOKEN}" "${MAAS_API_BASE_URL}/v1/models" 2>&1 || true)"
+  MODEL_URL="$(echo "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.url // empty' 2>/dev/null || true)"
+  MODEL_ID="$(echo  "${MODELS_JSON}" | jq -r '(.data // .models // [])[0]?.id  // empty' 2>/dev/null || true)"
+  if [[ -n "${MODEL_ID}" && "${MODEL_ID}" != "null" ]]; then
+    break
+  fi
+  echo "[smoke] models catalog empty (attempt ${_attempt}/10), retrying in 3s..." | tee -a "${LOG}"
+  sleep 3
+done
 
 # Fallbacks
 if [[ -z "${MODEL_ID}" || "${MODEL_ID}" == "null" ]]; then
   if [[ -z "${MODEL_NAME:-}" ]]; then
     echo "[smoke] ERROR: catalog did not return a model id and MODEL_NAME not set" | tee -a "${LOG}"
+    echo "[smoke] models response was: ${MODELS_JSON:0:500}"
     exit 2
   fi
   MODEL_ID="${MODEL_NAME}"
