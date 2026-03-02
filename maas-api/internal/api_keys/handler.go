@@ -3,7 +3,6 @@ package api_keys
 import (
 	"errors"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -14,18 +13,26 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
-type Handler struct {
-	service *Service
-	logger  *logger.Logger
+// AdminChecker is an interface for checking if a user is an admin.
+// This allows for different implementations (e.g., Auth CR-based, hardcoded, mock for testing).
+type AdminChecker interface {
+	IsAdmin(userGroups []string) bool
 }
 
-func NewHandler(log *logger.Logger, service *Service) *Handler {
+type Handler struct {
+	service      *Service
+	logger       *logger.Logger
+	adminChecker AdminChecker
+}
+
+func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Handler{
-		service: service,
-		logger:  log,
+		service:      service,
+		logger:       log,
+		adminChecker: adminChecker,
 	}
 }
 
@@ -47,9 +54,11 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 	return user
 }
 
-// isAdmin checks if the user has admin privileges.
+// isAdmin checks if the user has admin privileges based on Auth CR (services.opendatahub.io/v1alpha1).
+// The Auth CR defines adminGroups that are allowed to perform admin operations.
+// Returns true if the user belongs to at least one admin group, false otherwise.
 func (h *Handler) isAdmin(user *token.UserContext) bool {
-	return slices.Contains(user.Groups, "admin-users")
+	return h.adminChecker.IsAdmin(user.Groups)
 }
 
 // isAuthorizedForKey checks if the user is authorized to access the API key.
@@ -227,12 +236,21 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 
 // CreateAPIKeyRequest is the request body for creating an API key.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
-// Admins can optionally specify a username to create keys for other users.
+// Admins can optionally specify a username and groups to create keys for other users.
+//
+// TODO: Admin user-groups approach needs team consensus
+// Current implementation requires admins to explicitly provide groups when creating keys
+// for other users. Alternative approaches to consider:
+// 1. Remove admin-create-for-user feature entirely (users create own keys)
+// 2. Lookup user's live groups via impersonation/TokenReview
+// 3. Add organizationId/costCenter fields instead of/alongside groups
+// 4. Make groups optional and use default groups for the target user.
 type CreateAPIKeyRequest struct {
 	Name        string          `binding:"required"           json:"name"`
 	Description string          `json:"description,omitempty"`
 	ExpiresIn   *token.Duration `json:"expiresIn,omitempty"` // Optional - nil means permanent
 	Username    string          `json:"username,omitempty"`  // Optional - admin can create for other users
+	Groups      []string        `json:"groups,omitempty"`    // Optional - admin must provide when creating for others (TODO: needs consensus)
 }
 
 // CreateAPIKey handles POST /v1/api-keys
@@ -256,12 +274,40 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	if targetUsername == "" {
 		// No username provided - use authenticated user
 		targetUsername = user.Username
-	} else if targetUsername != user.Username && !h.isAdmin(user) {
-		// Username provided - only admins can create for other users
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": "only admins can create API keys for other users",
-		})
-		return
+	}
+
+	// Determine groups for the API key
+	var keyGroups []string
+
+	if targetUsername == user.Username {
+		// Creating key for self - always use authenticated user's groups
+		keyGroups = user.Groups
+	} else {
+		// Creating key for another user - admin only
+		if !h.isAdmin(user) {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "only admins can create API keys for other users",
+			})
+			return
+		}
+
+		// TODO: Admin groups approach needs team consensus
+		// Current: Admin must explicitly provide groups when creating keys for other users.
+		// Problem: Admin may not know what groups the target user should have.
+		// Alternative approaches:
+		//   1. Remove this feature (users create own keys only)
+		//   2. Lookup target user's current groups via impersonation/TokenReview
+		//   3. Use organizationId/costCenter for billing instead of groups for access
+		//   4. Allow empty groups and use sensible defaults (e.g., ["system:authenticated"])
+		// Current implementation chosen for explicit control and avoiding privilege escalation.
+		if len(req.Groups) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "groups must be provided when creating API keys for other users",
+			})
+			return
+		}
+
+		keyGroups = req.Groups
 	}
 
 	// Parse expiration duration if provided
@@ -271,7 +317,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		expiresIn = &d
 	}
 
-	result, err := h.service.CreateAPIKey(c.Request.Context(), targetUsername, user.Groups, req.Name, req.Description, expiresIn)
+	result, err := h.service.CreateAPIKey(c.Request.Context(), targetUsername, keyGroups, req.Name, req.Description, expiresIn)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -281,6 +327,9 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	h.logger.Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
+		"username", targetUsername,
+		"groups", keyGroups,
+		"createdBy", user.Username,
 	)
 
 	// Return the key - THIS IS THE ONLY TIME THE PLAINTEXT IS SHOWN

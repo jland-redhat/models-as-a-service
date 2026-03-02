@@ -11,7 +11,7 @@ spec:
         runAsNonRoot: true
       containers:
       - name: maas-api
-        image: maas-api
+        image: quay.io/isequeir/maas-api:api-key-20260301-232339
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -24,11 +24,26 @@ spec:
               fieldPath: metadata.namespace
         - name: SECURE
           value: "false"
-        # Note: By default, uses in-memory storage (ephemeral - data lost on restart).
-        # For persistent storage, use one of the overlays:
-        #   - deployment/overlays/tls-backend-disk (single replica, file-based)
-        # Or configure external database (HA-ready):
-        #   - See docs/samples/database/external for configuration examples
+        - name: DB_CONNECTION_URL
+          valueFrom:
+            secretKeyRef:
+              name: maas-db-config
+              key: DB_CONNECTION_URL
+        # PREREQUISITE: Secret 'maas-db-config' must exist before deployment.
+        # Create the secret with your PostgreSQL connection URL:
+        #
+        #   kubectl create secret generic maas-db-config \
+        #     -n <namespace> \
+        #     --from-literal=DB_CONNECTION_URL='postgresql://user:password@host:port/database?sslmode=disable'
+        #
+        # Database options:
+        #   - AWS RDS PostgreSQL
+        #   - Azure Database for PostgreSQL
+        #   - Crunchy PostgreSQL Operator
+        #   - Self-managed PostgreSQL cluster
+        #
+        # Note: scripts/deploy.sh creates this secret automatically for development.
+        # For production ODH/RHOAI deployments, create it before enabling modelsAsService.
         resources:
           requests:
             memory: "64Mi"

@@ -8,6 +8,14 @@
 - jq
 - kustomize 5.7
 - OCP 4.19.9+ (for GW API)
+- **PostgreSQL database** (required for API key management)
+
+!!! warning "Database Required"
+    The maas-api **requires** a PostgreSQL database and will fail to start without it.
+    You must create a Secret named `maas-db-config` with the `DB_CONNECTION_URL` key before deploying.
+
+    For development, the `scripts/deploy.sh` script creates this automatically.
+    For production ODH/RHOAI, see the [PostgreSQL Configuration Guide](../docs/content/configuration-and-management/POSTGRESQL_DEPLOYMENT.md).
 
 ### Setup
 

@@ -12,6 +12,37 @@ later, which is the version that has formal support for Gateway API. For earlier
 versions, there are alternatives (e.g. see a [guide here](https://github.com/opendatahub-io/kserve/tree/release-v0.15/docs/samples/llmisvc/ocp-4-18-setup)),
 but we provide no support for such setups.
 
+## Database Prerequisite
+
+**IMPORTANT:** MaaS requires a PostgreSQL database for API key management. You **must** create a Secret with the database connection URL **before** enabling modelsAsService in your DataScienceCluster.
+
+### Required Secret
+
+Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub`):
+
+```bash
+kubectl create secret generic maas-db-config \
+  -n opendatahub \
+  --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
+```
+
+### Database Options
+
+Choose one of the following PostgreSQL solutions:
+
+- **AWS RDS for PostgreSQL** (recommended for AWS deployments)
+- **Azure Database for PostgreSQL** (recommended for Azure deployments)
+- **Crunchy PostgreSQL Operator** (recommended for on-premises OpenShift)
+- **Self-managed PostgreSQL cluster**
+
+!!! warning "Required Before Deployment"
+    The maas-api will fail to start if this Secret is missing. The error will be:
+    ```
+    configuration validation failed: db connection URL is required
+    ```
+
+For detailed database setup instructions, see the [PostgreSQL Configuration Guide](../configuration-and-management/POSTGRESQL_DEPLOYMENT.md).
+
 ## Requirements for Open Data Hub project
 
 MaaS requires Open Data Hub version 3.0 or later, with the Model Serving component

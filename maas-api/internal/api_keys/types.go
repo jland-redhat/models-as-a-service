@@ -33,7 +33,6 @@ type ApiKeyMetadata struct {
 	Name               string   `json:"name"`
 	Description        string   `json:"description,omitempty"`
 	Username           string   `json:"username,omitempty"`
-	TierName           string   `json:"tierName,omitempty"`           // Tier determined at creation time
 	OriginalUserGroups []string `json:"originalUserGroups,omitempty"` // User's groups at creation (audit only)
 	CreationDate       string   `json:"creationDate"`
 	ExpirationDate     string   `json:"expirationDate,omitempty"` // Empty for permanent keys
@@ -47,7 +46,7 @@ type ValidationResult struct {
 	UserID   string   `json:"userId,omitempty"`
 	Username string   `json:"username,omitempty"`
 	KeyID    string   `json:"keyId,omitempty"`
-	Groups   []string `json:"groups,omitempty"` // Synthetic groups for tier-based authorization
+	Groups   []string `json:"groups,omitempty"` // User groups for subscription-based authorization
 	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }
 

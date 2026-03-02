@@ -162,7 +162,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, cluster.MaaSModelRefLister, cfg.Namespace)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, log)
-	apiKeyHandler := api_keys.NewHandler(log, apiKeyService)
+	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
 

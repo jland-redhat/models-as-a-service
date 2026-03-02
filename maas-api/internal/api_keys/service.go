@@ -55,7 +55,7 @@ type CreateAPIKeyResponse struct {
 // - Generates cryptographically secure key with sk-oai-* prefix
 // - Stores ONLY the SHA-256 hash (plaintext never stored)
 // - Returns plaintext ONCE at creation ("show-once" pattern)
-// - Determines tier from user groups and stores for authorization.
+// - Stores user groups for subscription-based authorization.
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(ctx context.Context, username string, userGroups []string, name, description string, expiresIn *time.Duration) (*CreateAPIKeyResponse, error) {
 	// Validate expiration based on policy

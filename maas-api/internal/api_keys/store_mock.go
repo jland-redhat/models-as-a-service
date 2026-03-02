@@ -97,6 +97,8 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 		}
 
 		meta := k.metadata
+		meta.Username = k.username // Set username field
+
 		// Auto-expire logic
 		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
 			meta.Status = TokenStatusExpired
