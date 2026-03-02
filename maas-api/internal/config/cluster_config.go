@@ -35,7 +35,7 @@ type ClusterConfig struct {
 	MaaSSubscriptionLister subscription.Lister
 
 	// AdminChecker checks if a user is an admin based on Auth CR (services.opendatahub.io/v1alpha1).
-	AdminChecker auth.AdminChecker
+	AdminChecker *auth.AdminChecker
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})

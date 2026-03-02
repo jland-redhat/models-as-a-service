@@ -9,23 +9,15 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// AdminChecker provides methods to check if a user is an admin based on Auth CR.
-type AdminChecker interface {
-	// IsAdmin checks if a user with the given groups is an admin.
-	IsAdmin(userGroups []string) bool
-	// GetAdminGroups returns the current list of admin groups from Auth CR.
-	GetAdminGroups() ([]string, error)
-}
-
-// authChecker implements AdminChecker using the Auth CR from OpenDataHub operator.
-type authChecker struct {
+// AdminChecker checks if a user is an admin based on Auth CR from OpenDataHub operator.
+// The Auth CR is a cluster-scoped singleton named "auth" from services.opendatahub.io/v1alpha1.
+type AdminChecker struct {
 	authLister cache.GenericLister
 }
 
 // NewAdminChecker creates a new AdminChecker that queries the Auth CR.
-// The Auth CR is a cluster-scoped singleton named "auth" from services.opendatahub.io/v1alpha1.
-func NewAdminChecker(authLister cache.GenericLister) AdminChecker {
-	return &authChecker{
+func NewAdminChecker(authLister cache.GenericLister) *AdminChecker {
+	return &AdminChecker{
 		authLister: authLister,
 	}
 }
@@ -33,7 +25,7 @@ func NewAdminChecker(authLister cache.GenericLister) AdminChecker {
 // IsAdmin checks if any of the user's groups match the admin groups defined in the Auth CR.
 // Returns true if the user belongs to at least one admin group, false otherwise.
 // If the Auth CR doesn't exist or can't be read, returns false (fail-closed).
-func (a *authChecker) IsAdmin(userGroups []string) bool {
+func (a *AdminChecker) IsAdmin(userGroups []string) bool {
 	adminGroups, err := a.GetAdminGroups()
 	if err != nil {
 		// Fail-closed: if we can't determine admin groups, deny admin access
@@ -53,7 +45,7 @@ func (a *authChecker) IsAdmin(userGroups []string) bool {
 // GetAdminGroups fetches the admin groups from the Auth CR.
 // The Auth CR is cluster-scoped and must be named "auth".
 // Returns empty slice and error if Auth CR doesn't exist or has invalid format.
-func (a *authChecker) GetAdminGroups() ([]string, error) {
+func (a *AdminChecker) GetAdminGroups() ([]string, error) {
 	// Auth CR is cluster-scoped, so we get it directly by name
 	obj, err := a.authLister.Get("auth")
 	if err != nil {
