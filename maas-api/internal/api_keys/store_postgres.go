@@ -1,6 +1,6 @@
 // Package api_keys provides API key management with PostgreSQL storage.
-// This implementation is designed for production use with golang-migrate
-// for schema management and sqlc for type-safe queries.
+// This implementation uses hand-written SQL with parameterized queries for safety.
+// Schema is managed by golang-migrate (see db/schema).
 package api_keys
 
 import (
