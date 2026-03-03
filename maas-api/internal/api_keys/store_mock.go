@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -146,6 +148,181 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	}, nil
 }
 
+// filterKeys applies username and status filters to API keys.
+func (m *MockStore) filterKeys(username string, statusFilters []string, now time.Time) []ApiKeyMetadata {
+	filtered := make([]ApiKeyMetadata, 0, len(m.keys))
+
+	for _, k := range m.keys {
+		// Filter by username
+		if username != "" && k.username != username {
+			continue
+		}
+
+		meta := k.metadata
+		meta.Username = k.username
+
+		// Auto-expire logic
+		if meta.Status == TokenStatusActive && !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
+			meta.Status = TokenStatusExpired
+		}
+
+		// Filter by status
+		if len(statusFilters) > 0 {
+			found := false
+			for _, status := range statusFilters {
+				if strings.TrimSpace(status) == meta.Status {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		// Set expiration and last used timestamps
+		if !k.expiresAt.IsZero() {
+			meta.ExpirationDate = k.expiresAt.Format(time.RFC3339)
+		}
+		if k.lastUsedAt != nil {
+			meta.LastUsedAt = k.lastUsedAt.Format(time.RFC3339)
+		}
+
+		filtered = append(filtered, meta)
+	}
+
+	return filtered
+}
+
+// compareTimestampFields compares two timestamp strings with NULL handling.
+// Returns: comparison result (-1, 0, 1) and a boolean indicating if NULL sorting should apply.
+func compareTimestampFields(val1, val2 string) (int, bool) {
+	// Both NULL - equal
+	if val1 == "" && val2 == "" {
+		return 0, false
+	}
+	// NULL values sort last
+	if val1 == "" {
+		return 0, true // Caller should return (order == SortOrderDesc)
+	}
+	if val2 == "" {
+		return 0, true // Caller should return (order == SortOrderAsc)
+	}
+
+	// Both non-NULL, parse and compare
+	t1, err1 := time.Parse(time.RFC3339, val1)
+	t2, err2 := time.Parse(time.RFC3339, val2)
+	if err1 != nil || err2 != nil {
+		// Fallback to string comparison
+		return strings.Compare(val1, val2), false
+	}
+	return t1.Compare(t2), false
+}
+
+// compareKeys compares two API keys based on the sort field and order.
+func compareKeys(key1, key2 ApiKeyMetadata, sortBy, order string) bool {
+	var cmp int
+
+	switch sortBy {
+	case "created_at":
+		// Both fields are always populated, safe to parse
+		t1, err1 := time.Parse(time.RFC3339, key1.CreationDate)
+		t2, err2 := time.Parse(time.RFC3339, key2.CreationDate)
+		if err1 != nil || err2 != nil {
+			cmp = strings.Compare(key1.CreationDate, key2.CreationDate)
+		} else {
+			cmp = t1.Compare(t2)
+		}
+
+	case "expires_at":
+		var handleNull bool
+		cmp, handleNull = compareTimestampFields(key1.ExpirationDate, key2.ExpirationDate)
+		if handleNull {
+			// NULL sorting logic
+			if key1.ExpirationDate == "" {
+				return order == SortOrderDesc
+			}
+			return order == SortOrderAsc
+		}
+
+	case "last_used_at":
+		var handleNull bool
+		cmp, handleNull = compareTimestampFields(key1.LastUsedAt, key2.LastUsedAt)
+		if handleNull {
+			// NULL sorting logic
+			if key1.LastUsedAt == "" {
+				return order == SortOrderDesc
+			}
+			return order == SortOrderAsc
+		}
+
+	case "name":
+		cmp = strings.Compare(key1.Name, key2.Name)
+	}
+
+	// Apply sort order
+	if order == SortOrderDesc {
+		return cmp > 0
+	}
+	return cmp < 0
+}
+
+// applyPagination applies offset and limit to the result set.
+func applyPagination(keys []ApiKeyMetadata, offset, limit int) ([]ApiKeyMetadata, bool) {
+	// Handle offset out of bounds
+	if offset >= len(keys) {
+		return []ApiKeyMetadata{}, false
+	}
+
+	// Apply offset
+	keys = keys[offset:]
+
+	// Check for more results and apply limit
+	hasMore := len(keys) > limit
+	if hasMore {
+		keys = keys[:limit]
+	}
+
+	return keys, hasMore
+}
+
+// Search implements flexible API key search with filtering, sorting, pagination.
+func (m *MockStore) Search(
+	ctx context.Context,
+	username string,
+	filters *SearchFilters,
+	sortParams *SortParams,
+	pagination *PaginationParams,
+) (*PaginatedResult, error) {
+	// Validate pagination
+	if pagination.Limit < 1 || pagination.Limit > MaxLimit {
+		return nil, errors.New("limit must be between 1 and 100")
+	}
+	if pagination.Offset < 0 {
+		return nil, errors.New("offset must be non-negative")
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Filter keys by username and status
+	now := time.Now().UTC()
+	allKeys := m.filterKeys(username, filters.Status, now)
+
+	// Sort keys
+	sort.Slice(allKeys, func(i, j int) bool {
+		return compareKeys(allKeys[i], allKeys[j], sortParams.By, sortParams.Order)
+	})
+
+	// Apply pagination
+	keys, hasMore := applyPagination(allKeys, pagination.Offset, pagination.Limit)
+
+	return &PaginatedResult{
+		Keys:    keys,
+		HasMore: hasMore,
+	}, nil
+}
+
 func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -204,17 +381,19 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetad
 	return nil, ErrKeyNotFound
 }
 
-func (m *MockStore) InvalidateAll(ctx context.Context, username string) error {
+func (m *MockStore) InvalidateAll(ctx context.Context, username string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	count := 0
 	for _, k := range m.keys {
 		if k.username == username && k.metadata.Status == TokenStatusActive {
 			k.metadata.Status = TokenStatusRevoked
+			count++
 		}
 	}
 
-	return nil
+	return count, nil
 }
 
 func (m *MockStore) Revoke(ctx context.Context, keyID string) error {

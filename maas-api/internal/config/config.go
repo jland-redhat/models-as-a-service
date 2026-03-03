@@ -1,9 +1,13 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"flag"
+	"fmt"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/env"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -56,7 +60,7 @@ func Load() *Config {
 		Secure:                 secure,
 		TLS:                    loadTLSConfig(),
 		DebugMode:              debugMode,
-		DBConnectionURL:        env.GetString("DB_CONNECTION_URL", ""),
+		DBConnectionURL:        "", // Loaded from K8s secret via LoadDatabaseURL()
 		APIKeyExpirationPolicy: env.GetString("API_KEY_EXPIRATION_POLICY", "optional"),
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
@@ -143,4 +147,32 @@ func (c *Config) PrintDeprecationWarnings(log *logger.Logger) {
 			log.Warn("WARNING: --port is deprecated, use --address with --secure=false to serve insecure HTTP traffic")
 		}
 	})
+}
+
+// LoadDatabaseURL reads the database connection URL from the Kubernetes secret.
+// This replaces the previous approach of reading from environment variables.
+//
+// Secret: maas-db-config (in the same namespace as the pod)
+// Key: DB_CONNECTION_URL
+//
+// Returns an error if the secret is missing or the key is not found.
+func (c *Config) LoadDatabaseURL(ctx context.Context, clientset *kubernetes.Clientset) error {
+	const (
+		//nolint:gosec // This is the documented name of the secret, not a hardcoded credential.
+		secretName = "maas-db-config"
+		secretKey  = "DB_CONNECTION_URL"
+	)
+
+	secret, err := clientset.CoreV1().Secrets(c.Namespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to read secret %s/%s: %w (ensure the secret exists before starting maas-api)", c.Namespace, secretName, err)
+	}
+
+	dbURL, ok := secret.Data[secretKey]
+	if !ok || len(dbURL) == 0 {
+		return fmt.Errorf("key %q not found or empty in secret %s/%s", secretKey, c.Namespace, secretName)
+	}
+
+	c.DBConnectionURL = string(dbURL)
+	return nil
 }

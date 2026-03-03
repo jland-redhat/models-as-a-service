@@ -2,6 +2,7 @@ package api_keys
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -115,7 +116,6 @@ func (h *Handler) parsePaginationParams(c *gin.Context) (PaginationParams, error
 
 	return params, nil
 }
-
 
 func (h *Handler) ListAPIKeys(c *gin.Context) {
 	user := h.getUserContext(c)
@@ -232,7 +232,6 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 
 	c.JSON(http.StatusOK, tok)
 }
-
 
 // CreateAPIKeyRequest is the request body for creating an API key.
 // Keys can be permanent (no expiresIn) or expiring (with expiresIn).
@@ -420,4 +419,186 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 
 	h.logger.Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
 	c.Status(http.StatusNoContent)
+}
+
+// SearchAPIKeys handles POST /v1/api-keys/search
+// Searches API keys with flexible filtering, sorting, and pagination.
+func (h *Handler) SearchAPIKeys(c *gin.Context) {
+	var req SearchAPIKeysRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user := h.getUserContext(c)
+	if user == nil {
+		return
+	}
+
+	// Apply defaults if not provided
+	if req.Filters == nil {
+		req.Filters = &SearchFilters{}
+	}
+	if req.Sort == nil {
+		req.Sort = &SortParams{
+			By:    DefaultSortBy,
+			Order: DefaultSortOrder,
+		}
+	}
+	if req.Pagination == nil {
+		req.Pagination = &PaginationParams{
+			Limit:  DefaultLimit,
+			Offset: 0,
+		}
+	}
+
+	// Validate and apply defaults for filters
+	if len(req.Filters.Status) == 0 {
+		// ⚠️ BREAKING CHANGE: Default to active only
+		req.Filters.Status = []string{"active"}
+	}
+
+	// Validate status values
+	for _, status := range req.Filters.Status {
+		trimmed := strings.TrimSpace(status)
+		if !ValidStatuses[trimmed] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
+			})
+			return
+		}
+	}
+
+	// Determine target username for filtering
+	isAdmin := h.isAdmin(user)
+	targetUsername := req.Filters.Username
+
+	if !isAdmin {
+		// Regular user: can only search own keys
+		if targetUsername != "" && targetUsername != user.Username {
+			c.JSON(http.StatusForbidden, gin.H{
+				"error": "non-admin users can only search their own API keys",
+			})
+			return
+		}
+		// Force filter to user's own keys
+		targetUsername = user.Username
+	}
+	// Admin: if no username specified (empty string), search all users
+
+	// Validate sort parameters
+	if req.Sort.By != "" && !ValidSortFields[req.Sort.By] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid sort.by: must be one of: created_at, expires_at, last_used_at, name",
+		})
+		return
+	}
+
+	// Normalize and validate sort order (case-insensitive)
+	if req.Sort.Order != "" {
+		orderLower := strings.ToLower(strings.TrimSpace(req.Sort.Order))
+		if !ValidSortOrders[orderLower] {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "invalid sort.order: must be asc or desc",
+			})
+			return
+		}
+		req.Sort.Order = orderLower
+	}
+
+	// Validate pagination
+	if req.Pagination.Limit < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagination.limit must be at least 1",
+		})
+		return
+	}
+	if req.Pagination.Limit > MaxLimit {
+		// Silently cap at maximum (user-friendly)
+		req.Pagination.Limit = MaxLimit
+	}
+	if req.Pagination.Offset < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "pagination.offset must be non-negative",
+		})
+		return
+	}
+
+	// Call service layer
+	result, err := h.service.Search(
+		c.Request.Context(),
+		targetUsername,
+		req.Filters,
+		req.Sort,
+		req.Pagination,
+	)
+	if err != nil {
+		h.logger.Error("Failed to search API keys",
+			"error", err,
+			"username", targetUsername,
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search API keys"})
+		return
+	}
+
+	// Build response
+	response := SearchAPIKeysResponse{
+		Object:  "list",
+		Data:    result.Keys,
+		HasMore: result.HasMore,
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+// BulkRevokeAPIKeys handles POST /v1/api-keys/bulk-revoke
+// Revokes all active API keys for a specific user.
+func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
+	var req BulkRevokeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user := h.getUserContext(c)
+	if user == nil {
+		return
+	}
+
+	// Authorization: users can revoke own keys, admins can revoke any user's keys
+	if req.Username != user.Username && !h.isAdmin(user) {
+		h.logger.Warn("Unauthorized bulk revoke attempt",
+			"requestingUser", user.Username,
+			"targetUser", req.Username,
+		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": "Access denied: you can only bulk revoke your own API keys",
+		})
+		return
+	}
+
+	// Perform bulk revocation
+	count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username)
+	if err != nil {
+		h.logger.Error("Failed to bulk revoke API keys",
+			"error", err,
+			"targetUser", req.Username,
+			"requestingUser", user.Username,
+		)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API keys"})
+		return
+	}
+
+	h.logger.Info("Bulk revoked API keys",
+		"count", count,
+		"targetUser", req.Username,
+		"revokedBy", user.Username,
+	)
+
+	response := BulkRevokeResponse{
+		RevokedCount: count,
+		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for user %s", count, req.Username),
+	}
+
+	c.JSON(http.StatusOK, response)
 }

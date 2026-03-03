@@ -295,41 +295,6 @@ paths:
     /v1/api-keys:
         post:
             tags:
-                - api-keys
-            summary: Create a hash-based API key
-            description: "Creates a hash-based API key (sk-oai-* format) with optional expiration. The plaintext key is shown only once at creation."
-            operationId: api-keys#create
-            requestBody:
-                required: true
-                content:
-                    application/json:
-                        schema:
-                            $ref: '#/components/schemas/TokenRequest'
-                        examples:
-                            named_token:
-                                summary: Named API key for production app
-                                value:
-                                    expiration: 24h
-                                    name: my-production-app
-                            long_lived:
-                                summary: Long-lived API key (30 days)
-                                value:
-                                    expiration: 720h
-                                    name: backend-service
-            responses:
-                "201":
-                    description: Created response.
-                    content:
-                        application/json:
-                            schema:
-                                $ref: '#/components/schemas/TokenResponse'
-                "400":
-                    description: Bad Request response.
-                "401":
-                    description: Unauthorized response.
-    /v1/api-keys:
-        post:
-            tags:
                 - api-keys-v2
             summary: Create a new hash-based API key
             description: Creates a new OpenAI-compatible API key (sk-oai-* format). Supports both permanent keys (no expiration) and expiring keys (with expiresIn parameter). The plaintext key is shown ONLY ONCE at creation time and cannot be retrieved again.
@@ -396,28 +361,78 @@ paths:
                     description: Bad Request response.
                 "401":
                     description: Unauthorized response.
-        get:
+    /v1/api-keys/search:
+        post:
             tags:
                 - api-keys-v2
-            summary: List API keys for the authenticated user with pagination
-            description: Returns a paginated list of all API key metadata for the current user with their creation dates, expiration dates, and status.
-            operationId: api-keys-v2#list
-            parameters:
-                - in: query
-                  name: limit
-                  schema:
-                      type: integer
-                      minimum: 1
-                      maximum: 100
-                      default: 50
-                  description: Maximum number of keys to return per page (default 50, max 100)
-                - in: query
-                  name: offset
-                  schema:
-                      type: integer
-                      minimum: 0
-                      default: 0
-                  description: Number of keys to skip for pagination (default 0)
+            summary: Search and filter API keys
+            description: Search API keys with flexible filtering, sorting, and pagination. Supports filtering by username (admin-only), status, sorting by multiple fields, and pagination.
+            operationId: api-keys-v2#search
+            requestBody:
+                required: false
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            properties:
+                                filters:
+                                    type: object
+                                    properties:
+                                        username:
+                                            type: string
+                                            description: Filter by username (admin-only)
+                                        status:
+                                            type: array
+                                            items:
+                                                type: string
+                                            description: Filter by status (active, revoked, expired). Defaults to active only.
+                                sort:
+                                    type: object
+                                    properties:
+                                        by:
+                                            type: string
+                                            enum: [created_at, expires_at, last_used_at, name]
+                                            description: Field to sort by
+                                        order:
+                                            type: string
+                                            enum: [asc, desc]
+                                            description: Sort order
+                                pagination:
+                                    type: object
+                                    properties:
+                                        limit:
+                                            type: integer
+                                            minimum: 1
+                                            maximum: 100
+                                            default: 50
+                                        offset:
+                                            type: integer
+                                            minimum: 0
+                                            default: 0
+                        examples:
+                            default_search:
+                                summary: Default search (active keys, newest first)
+                                value:
+                                    filters:
+                                        status: ["active"]
+                                    sort:
+                                        by: "created_at"
+                                        order: "desc"
+                                    pagination:
+                                        limit: 50
+                                        offset: 0
+                            admin_search:
+                                summary: Admin searching user's keys
+                                value:
+                                    filters:
+                                        username: "alice"
+                                        status: ["active", "revoked"]
+                                    sort:
+                                        by: "name"
+                                        order: "asc"
+                                    pagination:
+                                        limit: 20
+                                        offset: 0
             responses:
                 "200":
                     description: OK response.
@@ -429,34 +444,84 @@ paths:
                                 object: list
                                 data:
                                     - id: key_abc123
-                                      keyPrefix: sk-oai-abc
                                       name: my-production-key
                                       creationDate: "2024-01-15T10:30:00Z"
                                       status: active
                                     - id: key_def456
-                                      keyPrefix: sk-oai-def
                                       name: my-test-key
                                       creationDate: "2024-01-14T09:15:00Z"
                                       expirationDate: "2024-04-14T09:15:00Z"
                                       status: active
                                 has_more: true
                 "400":
-                    description: Bad Request. Invalid pagination parameters.
+                    description: Bad Request. Invalid search parameters.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
-                            examples:
-                                invalid_limit:
-                                    summary: Invalid limit value
-                                    value:
-                                        error: "invalid limit parameter: must be a number"
-                                invalid_offset:
-                                    summary: Invalid offset value
-                                    value:
-                                        error: "invalid offset parameter: must be non-negative"
                 "401":
                     description: Unauthorized response.
+    /v1/api-keys/bulk-revoke:
+        post:
+            tags:
+                - api-keys-v2
+            summary: Bulk revoke API keys for a user
+            description: Revokes all active API keys for a specific user. Regular users can only bulk revoke their own keys. Admins can bulk revoke any user's keys.
+            operationId: api-keys-v2#bulk-revoke
+            requestBody:
+                required: true
+                content:
+                    application/json:
+                        schema:
+                            type: object
+                            required:
+                                - username
+                            properties:
+                                username:
+                                    type: string
+                                    description: Username whose keys should be revoked
+                        examples:
+                            revoke_own:
+                                summary: User revoking own keys
+                                value:
+                                    username: "alice"
+                            admin_revoke:
+                                summary: Admin revoking user's keys
+                                value:
+                                    username: "bob"
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                                properties:
+                                    revokedCount:
+                                        type: integer
+                                        description: Number of keys that were revoked
+                                    message:
+                                        type: string
+                                        description: Success message
+                            example:
+                                revokedCount: 5
+                                message: "Successfully revoked 5 active API key(s) for user alice"
+                "400":
+                    description: Bad Request. Invalid request.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "401":
+                    description: Unauthorized response.
+                "403":
+                    description: Forbidden. User trying to revoke another user's keys.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                            example:
+                                error: "Access denied: you can only bulk revoke your own API keys"
     /v1/api-keys/{id}:
         get:
             tags:
@@ -496,12 +561,23 @@ paths:
                   required: true
                   description: ID of the API key to revoke
             responses:
-                "204":
-                    description: No Content. Key successfully revoked.
+                "200":
+                    description: OK. Key successfully revoked.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TokenMetadata'
+                            example:
+                                id: key_abc123
+                                name: my-production-key
+                                creationDate: "2024-01-15T10:30:00Z"
+                                status: revoked
                 "404":
                     description: Not Found. API key not found.
                 "401":
                     description: Unauthorized response.
+                "403":
+                    description: Forbidden. User trying to revoke another user's key.
 components:
   securitySchemes:
     bearerAuth:

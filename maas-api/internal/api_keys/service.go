@@ -195,3 +195,23 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 	return s.store.Revoke(ctx, keyID)
 }
+
+// Search searches API keys with flexible filtering, sorting, and pagination.
+func (s *Service) Search(
+	ctx context.Context,
+	username string,
+	filters *SearchFilters,
+	sort *SortParams,
+	pagination *PaginationParams,
+) (*PaginatedResult, error) {
+	return s.store.Search(ctx, username, filters, sort, pagination)
+}
+
+// BulkRevokeAPIKeys revokes all active keys for a user
+// Returns count of revoked keys.
+func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string) (int, error) {
+	if username == "" {
+		return 0, errors.New("username is required")
+	}
+	return s.store.InvalidateAll(ctx, username)
+}

@@ -147,6 +147,6 @@ kubectl create secret generic maas-db-config \
 
 ## Documentation
 
-- [PostgreSQL Configuration Guide](../../docs/content/configuration-and-management/POSTGRESQL_DEPLOYMENT.md)
-- [MaaS Installation Prerequisites](../../docs/content/install/prerequisites.md)
-- [MaaS Setup Guide](../../docs/content/install/maas-setup.md)
+- [PostgreSQL Configuration Guide](../../../docs/content/configuration-and-management/POSTGRESQL_DEPLOYMENT.md)
+- [MaaS Installation Prerequisites](../../../docs/content/install/prerequisites.md)
+- [MaaS Setup Guide](../../../docs/content/install/maas-setup.md)

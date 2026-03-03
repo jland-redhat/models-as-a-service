@@ -46,6 +46,21 @@ func serve() error {
 
 	cfg.PrintDeprecationWarnings(log)
 
+	// Create cluster config early to load database URL from secret
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
+	if err != nil {
+		return fmt.Errorf("failed to create cluster config: %w", err)
+	}
+
+	// Load database connection URL from Kubernetes secret
+	log.Info("Loading database connection URL from secret...")
+	if err := cfg.LoadDatabaseURL(ctx, cluster.ClientSet); err != nil {
+		return fmt.Errorf("failed to load database URL: %w", err)
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
@@ -71,9 +86,6 @@ func serve() error {
 
 	router.OPTIONS("/*path", func(c *gin.Context) { c.Status(204) })
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	store, err := initStore(ctx, log, cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize token store: %w", err)
@@ -84,7 +96,7 @@ func serve() error {
 		}
 	}()
 
-	if err := registerHandlers(ctx, log, router, cfg, store); err != nil {
+	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
@@ -132,13 +144,8 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, store api_keys.MetadataStore) error {
+func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
-
-	cluster, err := config.NewClusterConfig(cfg.Namespace, constant.DefaultResyncPeriod)
-	if err != nil {
-		return fmt.Errorf("failed to create cluster config: %w", err)
-	}
 
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")
@@ -168,10 +175,11 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
-	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)       // Create hash-based key
-	apiKeyRoutes.GET("", apiKeyHandler.ListAPIKeys)         // List all keys
-	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)       // Get specific key
-	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey) // Revoke specific key
+	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
+	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
+	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys
+	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
+	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
 
 	// Internal routes for Authorino HTTP callback (no auth required - called by Authorino)
 	internalRoutes := router.Group("/internal/v1")

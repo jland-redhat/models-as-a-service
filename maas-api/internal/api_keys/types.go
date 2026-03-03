@@ -50,10 +50,10 @@ type ValidationResult struct {
 	Reason   string   `json:"reason,omitempty"` // If invalid: "key not found", "revoked", etc.
 }
 
-// PaginationParams holds query parameters for paginated list requests.
+// PaginationParams holds pagination parameters.
 type PaginationParams struct {
-	Limit  int
-	Offset int
+	Limit  int `json:"limit"`  // Default 50, max 100
+	Offset int `json:"offset"` // Default 0
 }
 
 // PaginatedResult holds the result of a paginated query.
@@ -64,7 +64,99 @@ type PaginatedResult struct {
 
 // ListAPIKeysResponse is the HTTP response for GET /v1/api-keys.
 type ListAPIKeysResponse struct {
-	Object  string           `json:"object"`   // Always "list"
+	Object  string           `json:"object"` // Always "list"
 	Data    []ApiKeyMetadata `json:"data"`
 	HasMore bool             `json:"has_more"`
+}
+
+// ============================================================
+// SEARCH REQUEST/RESPONSE TYPES
+// ============================================================
+
+// SearchAPIKeysRequest for POST /v1/api-keys/search.
+type SearchAPIKeysRequest struct {
+	Filters    *SearchFilters    `json:"filters,omitempty"`
+	Sort       *SortParams       `json:"sort,omitempty"`
+	Pagination *PaginationParams `json:"pagination,omitempty"`
+}
+
+// SearchFilters holds all filter criteria for API key search.
+type SearchFilters struct {
+	// Phase 1: Core filters
+	Username string   `json:"username,omitempty"` // Admin-only filter
+	Status   []string `json:"status,omitempty"`   // active, revoked, expired
+
+	// Phase 2: Date range filters (future)
+	CreatedAfter  *string `json:"createdAfter,omitempty"`  // RFC3339
+	CreatedBefore *string `json:"createdBefore,omitempty"` // RFC3339
+	ExpiresAfter  *string `json:"expiresAfter,omitempty"`  // RFC3339
+	ExpiresBefore *string `json:"expiresBefore,omitempty"` // RFC3339
+	LastUsedAfter *string `json:"lastUsedAfter,omitempty"` // RFC3339
+
+	// Phase 3: Text search (future)
+	NameContains        *string `json:"nameContains,omitempty"`
+	DescriptionContains *string `json:"descriptionContains,omitempty"`
+
+	// Phase 4: Boolean filters (future)
+	HasExpiration *bool `json:"hasExpiration,omitempty"` // true = expiring, false = permanent
+	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
+}
+
+// SortParams specifies sorting criteria.
+type SortParams struct {
+	By    string `json:"by"`    // created_at, expires_at, last_used_at, name
+	Order string `json:"order"` // asc, desc
+}
+
+// Default values.
+const (
+	DefaultSortBy    = "created_at"
+	DefaultSortOrder = "desc"
+	SortOrderAsc     = "asc"
+	SortOrderDesc    = "desc"
+	DefaultLimit     = 50
+	MaxLimit         = 100
+)
+
+// ValidSortFields prevents SQL injection via allowlist.
+var ValidSortFields = map[string]bool{
+	"created_at":   true,
+	"expires_at":   true,
+	"last_used_at": true,
+	"name":         true,
+}
+
+// ValidSortOrders allowlist for sort direction.
+var ValidSortOrders = map[string]bool{
+	"asc":  true,
+	"desc": true,
+}
+
+// ValidStatuses allowlist for status filtering.
+var ValidStatuses = map[string]bool{
+	"active":  true,
+	"revoked": true,
+	"expired": true,
+}
+
+// SearchAPIKeysResponse is the HTTP response for POST /v1/api-keys/search.
+type SearchAPIKeysResponse struct {
+	Object  string           `json:"object"` // Always "list"
+	Data    []ApiKeyMetadata `json:"data"`
+	HasMore bool             `json:"has_more"`
+}
+
+// ============================================================
+// BULK REVOKE TYPES
+// ============================================================
+
+// BulkRevokeRequest for POST /v1/api-keys/bulk-revoke.
+type BulkRevokeRequest struct {
+	Username string `binding:"required" json:"username"`
+}
+
+// BulkRevokeResponse returns count of revoked keys.
+type BulkRevokeResponse struct {
+	RevokedCount int    `json:"revokedCount"`
+	Message      string `json:"message"`
 }

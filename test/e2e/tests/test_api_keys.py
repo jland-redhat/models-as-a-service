@@ -45,8 +45,18 @@ class TestAPIKeyCRUD:
         assert r2.status_code == 201
         key2_id = r2.json()["id"]
 
-        # List keys
-        r = requests.get(api_keys_base_url, headers=headers, timeout=30, verify=False)
+        # List keys using search endpoint
+        r = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={
+                "filters": {"status": ["active"]},
+                "sort": {"by": "created_at", "order": "desc"},
+                "pagination": {"limit": 50, "offset": 0}
+            },
+            timeout=30,
+            verify=False
+        )
         assert r.status_code == 200
         data = r.json()
         items = data.get("items") or data.get("data") or []
@@ -63,7 +73,17 @@ class TestAPIKeyCRUD:
         print(f"[list] Found {len(items)} keys")
 
         # Test pagination
-        r_limit = requests.get(api_keys_base_url, headers=headers, params={"limit": 1}, timeout=30, verify=False)
+        r_limit = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={
+                "filters": {"status": ["active"]},
+                "sort": {"by": "created_at", "order": "desc"},
+                "pagination": {"limit": 1, "offset": 0}
+            },
+            timeout=30,
+            verify=False
+        )
         assert r_limit.status_code == 200
         limited_items = (r_limit.json().get("items") or r_limit.json().get("data") or [])
         assert len(limited_items) <= 1
@@ -76,8 +96,8 @@ class TestAPIKeyCRUD:
         assert r_create.status_code == 201
         key_id = r_create.json()["id"]
 
-        # Revoke it
-        r = requests.post(f"{api_keys_base_url}/{key_id}/revoke", headers=headers, timeout=30, verify=False)
+        # Revoke it using DELETE
+        r = requests.delete(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=False)
         assert r.status_code == 200
         assert r.json().get("status") == "revoked"
 
@@ -108,16 +128,26 @@ class TestAPIKeyAuthorization:
 
         print(f"[admin] User '{username}' created key {user_key_id}")
 
-        # Admin lists keys filtered by username
-        r_admin = requests.get(api_keys_base_url, headers=admin_headers, params={"username": username}, timeout=30, verify=False)
+        # Admin lists keys filtered by username using search endpoint
+        r_admin = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=admin_headers,
+            json={
+                "filters": {"username": username, "status": ["active"]},
+                "sort": {"by": "created_at", "order": "desc"},
+                "pagination": {"limit": 50, "offset": 0}
+            },
+            timeout=30,
+            verify=False
+        )
         assert r_admin.status_code == 200
         items = r_admin.json().get("items") or r_admin.json().get("data") or []
         key_ids = [item["id"] for item in items]
         assert user_key_id in key_ids
         print(f"[admin] Admin listed {len(items)} keys for '{username}'")
 
-        # Admin revokes user's key
-        r_revoke = requests.post(f"{api_keys_base_url}/{user_key_id}/revoke", headers=admin_headers, timeout=30, verify=False)
+        # Admin revokes user's key using DELETE
+        r_revoke = requests.delete(f"{api_keys_base_url}/{user_key_id}", headers=admin_headers, timeout=30, verify=False)
         assert r_revoke.status_code == 200
         assert r_revoke.json().get("status") == "revoked"
         print(f"[admin] Admin successfully revoked user's key {user_key_id}")
@@ -136,8 +166,8 @@ class TestAPIKeyAuthorization:
         r_get = requests.get(f"{api_keys_base_url}/{admin_key_id}", headers=headers, timeout=30, verify=False)
         assert r_get.status_code == 403, f"Expected 403, got {r_get.status_code}"
 
-        # Regular user tries to revoke admin's key
-        r_revoke = requests.post(f"{api_keys_base_url}/{admin_key_id}/revoke", headers=headers, timeout=30, verify=False)
+        # Regular user tries to revoke admin's key using DELETE
+        r_revoke = requests.delete(f"{api_keys_base_url}/{admin_key_id}", headers=headers, timeout=30, verify=False)
         assert r_revoke.status_code == 403, f"Expected 403, got {r_revoke.status_code}"
         print("[authz] Non-admin correctly got 403 for admin's key")
 
@@ -173,7 +203,7 @@ class TestAPIKeyValidation:
         data = r.json()
         key, key_id = data["key"], data["id"]
 
-        requests.post(f"{api_keys_base_url}/{key_id}/revoke", headers=headers, timeout=30, verify=False)
+        requests.delete(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=False)
         time.sleep(1)  # Allow revocation to propagate
 
         # Validate revoked key
@@ -191,3 +221,81 @@ class TestAPIKeyValidation:
         else:
             assert r_val.status_code in (401, 403)
             print(f"[validate] Revoked key returned {r_val.status_code}")
+
+
+class TestAPIKeyBulkOperations:
+    """Tests for bulk operations like bulk-revoke."""
+
+    def test_bulk_revoke_own_keys(self, api_keys_base_url: str, headers: dict):
+        """Test 8: Bulk revoke - user can bulk revoke their own keys."""
+        # Create multiple keys
+        key_ids = []
+        for i in range(3):
+            r = requests.post(api_keys_base_url, headers=headers, json={"name": f"bulk-test-{i}"}, timeout=30, verify=False)
+            assert r.status_code == 201
+            key_ids.append(r.json()["id"])
+
+        # Get username from one of the keys
+        r_get = requests.get(f"{api_keys_base_url}/{key_ids[0]}", headers=headers, timeout=30, verify=False)
+        username = r_get.json().get("username") or r_get.json().get("owner")
+        assert username
+
+        # Bulk revoke all keys for this user
+        r_bulk = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=headers,
+            json={"username": username},
+            timeout=30,
+            verify=False
+        )
+        assert r_bulk.status_code == 200
+        data = r_bulk.json()
+        assert data.get("revokedCount") >= 3, f"Expected at least 3 revoked, got {data.get('revokedCount')}"
+        print(f"[bulk-revoke] Successfully revoked {data.get('revokedCount')} keys for user {username}")
+
+        # Verify keys are revoked
+        for key_id in key_ids:
+            r_check = requests.get(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=False)
+            if r_check.status_code == 200:
+                assert r_check.json().get("status") == "revoked"
+
+    def test_bulk_revoke_other_user_forbidden(self, api_keys_base_url: str, headers: dict):
+        """Test 9: Bulk revoke - non-admin cannot bulk revoke other user's keys."""
+        # Try to bulk revoke another user's keys (should fail with 403)
+        r_bulk = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=headers,
+            json={"username": "someotheruser"},
+            timeout=30,
+            verify=False
+        )
+        assert r_bulk.status_code == 403, f"Expected 403, got {r_bulk.status_code}: {r_bulk.text}"
+        print("[bulk-revoke] Non-admin correctly got 403 when trying to bulk revoke other user's keys")
+
+    def test_bulk_revoke_admin_can_revoke_any_user(self, api_keys_base_url: str, headers: dict, admin_headers: dict):
+        """Test 10: Bulk revoke - admin can bulk revoke any user's keys."""
+        if not admin_headers:
+            pytest.skip("ADMIN_OC_TOKEN not set")
+
+        # Create a key as regular user
+        r = requests.post(api_keys_base_url, headers=headers, json={"name": "admin-bulk-revoke-test"}, timeout=30, verify=False)
+        assert r.status_code == 201
+        key_id = r.json()["id"]
+
+        # Get username
+        r_get = requests.get(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=False)
+        username = r_get.json().get("username") or r_get.json().get("owner")
+        assert username
+
+        # Admin bulk revokes user's keys
+        r_bulk = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=admin_headers,
+            json={"username": username},
+            timeout=30,
+            verify=False
+        )
+        assert r_bulk.status_code == 200
+        data = r_bulk.json()
+        assert data.get("revokedCount") >= 1
+        print(f"[bulk-revoke] Admin successfully revoked {data.get('revokedCount')} keys for user {username}")

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/lib/pq"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -167,6 +168,136 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 	}, nil
 }
 
+// Search implements flexible API key search with filtering, sorting, pagination.
+func (s *PostgresStore) Search(
+	ctx context.Context,
+	username string,
+	filters *SearchFilters,
+	sort *SortParams,
+	pagination *PaginationParams,
+) (*PaginatedResult, error) {
+	// Validate pagination
+	if pagination.Limit < 1 || pagination.Limit > MaxLimit {
+		return nil, errors.New("limit must be between 1 and 100")
+	}
+	if pagination.Offset < 0 {
+		return nil, errors.New("offset must be non-negative")
+	}
+
+	// Build WHERE clause
+	var whereClauses []string
+	var args []any
+	argPos := 1
+
+	// Filter by username
+	if username != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("username = $%d", argPos))
+		args = append(args, username)
+		argPos++
+	}
+
+	// Filter by status
+	if len(filters.Status) > 0 {
+		placeholders := make([]string, len(filters.Status))
+		for i, status := range filters.Status {
+			placeholders[i] = fmt.Sprintf("$%d", argPos)
+			args = append(args, strings.TrimSpace(status))
+			argPos++
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("status IN (%s)", strings.Join(placeholders, ",")))
+	}
+
+	// Build final WHERE clause
+	whereClause := ""
+	if len(whereClauses) > 0 {
+		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	// Build ORDER BY clause
+	orderByClause := fmt.Sprintf("ORDER BY %s %s", sort.By, strings.ToUpper(sort.Order))
+
+	// Handle NULL values for nullable timestamp columns (NULLS LAST)
+	if sort.By == "expires_at" || sort.By == "last_used_at" {
+		if sort.Order == "asc" {
+			orderByClause = fmt.Sprintf("ORDER BY %s ASC NULLS LAST", sort.By)
+		} else {
+			orderByClause = fmt.Sprintf("ORDER BY %s DESC NULLS LAST", sort.By)
+		}
+	}
+
+	// Fetch one extra to determine hasMore
+	fetchLimit := pagination.Limit + 1
+
+	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
+	query := fmt.Sprintf(`
+		SELECT id, name, description, created_at, expires_at, status, last_used_at
+		FROM api_keys
+		%s
+		%s
+		LIMIT $%d OFFSET $%d
+	`, whereClause, orderByClause, argPos, argPos+1)
+
+	args = append(args, fetchLimit, pagination.Offset)
+
+	// Execute query
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search API keys: %w", err)
+	}
+	defer rows.Close()
+
+	var keys []ApiKeyMetadata
+	for rows.Next() {
+		var key ApiKeyMetadata
+		var createdAt, expiresAt, lastUsedAt sql.NullTime
+		var description sql.NullString
+
+		err := rows.Scan(
+			&key.ID,
+			&key.Name,
+			&description,
+			&createdAt,
+			&expiresAt,
+			&key.Status,
+			&lastUsedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan API key: %w", err)
+		}
+
+		// Convert timestamps
+		if createdAt.Valid {
+			key.CreationDate = createdAt.Time.Format(time.RFC3339)
+		}
+		if description.Valid {
+			key.Description = description.String
+		}
+		if expiresAt.Valid {
+			key.ExpirationDate = expiresAt.Time.Format(time.RFC3339)
+		}
+		if lastUsedAt.Valid {
+			key.LastUsedAt = lastUsedAt.Time.Format(time.RFC3339)
+		}
+
+		keys = append(keys, key)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating API keys: %w", err)
+	}
+
+	// Check for more results
+	hasMore := len(keys) > pagination.Limit
+	if hasMore {
+		keys = keys[:pagination.Limit]
+	}
+
+	return &PaginatedResult{
+		Keys:    keys,
+		HasMore: hasMore,
+	}, nil
+}
+
 // Get retrieves a single API key by ID.
 func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKeyMetadata, error) {
 	query := `
@@ -255,16 +386,23 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKeyM
 }
 
 // InvalidateAll revokes all active keys for a user.
-func (s *PostgresStore) InvalidateAll(ctx context.Context, username string) error {
+// Returns the count of keys that were revoked.
+func (s *PostgresStore) InvalidateAll(ctx context.Context, username string) (int, error) {
 	query := `UPDATE api_keys SET status = 'revoked' WHERE username = $1 AND status = 'active'`
+
 	result, err := s.db.ExecContext(ctx, query, username)
 	if err != nil {
-		return fmt.Errorf("failed to revoke keys: %w", err)
+		return 0, fmt.Errorf("failed to revoke keys: %w", err)
 	}
 
-	rows, _ := result.RowsAffected()
-	s.logger.Info("Revoked all keys for user", "count", rows, "user", username)
-	return nil
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Revoked all keys for user", "count", count, "user", username)
+	return count, nil
 }
 
 // Revoke marks a specific API key as revoked.

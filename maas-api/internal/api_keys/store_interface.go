@@ -33,14 +33,25 @@ type MetadataStore interface {
 	// statuses can filter by status (active, revoked, expired) - empty means all statuses.
 	List(ctx context.Context, username string, params PaginationParams, statuses []string) (*PaginatedResult, error)
 
+	// Search returns API keys matching the search criteria
+	// Supports filtering, sorting, and pagination
+	Search(
+		ctx context.Context,
+		username string,
+		filters *SearchFilters,
+		sort *SortParams,
+		pagination *PaginationParams,
+	) (*PaginatedResult, error)
+
 	Get(ctx context.Context, jti string) (*ApiKeyMetadata, error)
 
 	// GetByHash looks up an API key by its SHA-256 hash (for Authorino validation)
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked
 	GetByHash(ctx context.Context, keyHash string) (*ApiKeyMetadata, error)
 
-	// InvalidateAll marks all active tokens for a user as expired.
-	InvalidateAll(ctx context.Context, username string) error
+	// InvalidateAll marks all active tokens for a user as revoked.
+	// Returns the count of keys that were revoked.
+	InvalidateAll(ctx context.Context, username string) (int, error)
 
 	// Revoke marks a specific API key as revoked (soft delete)
 	Revoke(ctx context.Context, keyID string) error
