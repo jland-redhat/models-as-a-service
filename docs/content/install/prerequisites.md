@@ -16,6 +16,18 @@ but we provide no support for such setups.
 
 **IMPORTANT:** MaaS requires a PostgreSQL database for API key management. You **must** create a Secret with the database connection URL **before** enabling modelsAsService in your DataScienceCluster.
 
+### Database Options
+
+Choose one of the following PostgreSQL solutions for **production**:
+
+- **AWS RDS for PostgreSQL** (recommended for AWS deployments)
+- **Azure Database for PostgreSQL** (recommended for Azure deployments)
+- **Crunchy PostgreSQL Operator** (recommended for on-premises OpenShift)
+- **Self-managed PostgreSQL cluster** with backups and high availability
+
+!!! note "Development"
+    For **development**, the `scripts/deploy.sh` script creates a PostgreSQL instance and Secret automatically.
+
 ### Required Secret
 
 Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub`):
@@ -26,22 +38,21 @@ kubectl create secret generic maas-db-config \
   --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
 ```
 
-### Database Options
+**Connection String Format:**
+```
+postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
+```
 
-Choose one of the following PostgreSQL solutions:
+**Example for AWS RDS:**
+```bash
+kubectl create secret generic maas-db-config \
+  -n opendatahub \
+  --from-literal=DB_CONNECTION_URL='postgresql://maasuser:mypassword@mydb.abc123.us-east-1.rds.amazonaws.com:5432/maas?sslmode=require'
+```
 
-- **AWS RDS for PostgreSQL** (recommended for AWS deployments)
-- **Azure Database for PostgreSQL** (recommended for Azure deployments)
-- **Crunchy PostgreSQL Operator** (recommended for on-premises OpenShift)
-- **Self-managed PostgreSQL cluster**
+!!! warning "Deployment Order"
+    The maas-api will fail to start if the Secret is missing. Create the Secret **before** enabling modelsAsService in your DataScienceCluster.
 
-!!! warning "Required Before Deployment"
-    The maas-api will fail to start if this Secret is missing. The error will be:
-    ```
-    configuration validation failed: db connection URL is required
-    ```
-
-For detailed database setup instructions, see the [PostgreSQL Configuration Guide](../configuration-and-management/POSTGRESQL_DEPLOYMENT.md).
 
 ## Requirements for Open Data Hub project
 

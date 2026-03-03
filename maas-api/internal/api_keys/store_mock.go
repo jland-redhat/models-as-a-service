@@ -405,6 +405,11 @@ func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 		return ErrKeyNotFound
 	}
 
+	// Match PostgreSQL behavior: only revoke keys with status 'active'
+	if k.metadata.Status != StatusActive {
+		return ErrKeyNotFound
+	}
+
 	k.metadata.Status = StatusRevoked
 	return nil
 }

@@ -1,4 +1,4 @@
--- Migration: 0001_create_api_keys
+-- Schema for API Key Management: 0001_create_api_keys.up.sql
 -- Description: Initial schema for API Key Management with group-based authorization
 -- Includes: hash-only storage, status tracking, usage tracking, user groups
 

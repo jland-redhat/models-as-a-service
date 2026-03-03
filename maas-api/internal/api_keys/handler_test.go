@@ -113,7 +113,7 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 	err = store.Revoke(ctx, "key-3")
 	require.NoError(t, err)
 
-	// Empty request should use defaults: active only, created_at desc, limit 50
+	// Empty request should use defaults: all statuses, created_at desc, limit 50
 	requestBody := `{}`
 
 	w := httptest.NewRecorder()
@@ -131,7 +131,7 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "list", response.Object)
-	assert.Len(t, response.Data, 2, "should return only active keys by default")
+	assert.Len(t, response.Data, 3, "should return all keys (all statuses) by default")
 	assert.False(t, response.HasMore)
 }
 
@@ -260,7 +260,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
 
-	t.Run("DefaultActiveOnly", func(t *testing.T) {
+	t.Run("DefaultAllStatuses", func(t *testing.T) {
 		requestBody := `{}`
 
 		w := httptest.NewRecorder()
@@ -276,8 +276,14 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 		var response SearchAPIKeysResponse
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
-		assert.Len(t, response.Data, 1, "should return only active keys by default")
-		assert.Equal(t, StatusActive, response.Data[0].Status)
+		assert.Len(t, response.Data, 2, "should return all keys (all statuses) by default")
+		// Verify we got both active and revoked keys
+		statuses := make(map[Status]int)
+		for _, key := range response.Data {
+			statuses[key.Status]++
+		}
+		assert.Equal(t, 1, statuses[StatusActive], "should have 1 active key")
+		assert.Equal(t, 1, statuses[StatusRevoked], "should have 1 revoked key")
 	})
 
 	t.Run("ExplicitActiveFilter", func(t *testing.T) {
@@ -948,4 +954,270 @@ func testRegularUserCreateOwnKey(t *testing.T, handler *Handler, store *MockStor
 	require.NoError(t, err)
 	assert.Equal(t, "alice", meta.Username)
 	assert.Equal(t, []string{"tier-free", "system:authenticated"}, meta.Groups)
+}
+
+// ============================================================
+// GET API KEY HANDLER TESTS (GET /v1/api-keys/:id)
+// ============================================================
+
+func TestGetAPIKeyHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	// Create test keys for alice and bob
+	aliceKey := &ApiKey{
+		ID:           "alice-key-1",
+		Username:     "alice",
+		Groups:       []string{"tier-free"},
+		Name:         "Alice's Key",
+		Status:       StatusActive,
+		CreationDate: "2025-01-15T10:00:00Z",
+	}
+	bobKey := &ApiKey{
+		ID:           "bob-key-1",
+		Username:     "bob",
+		Groups:       []string{"tier-premium"},
+		Name:         "Bob's Key",
+		Status:       StatusActive,
+		CreationDate: "2025-01-16T10:00:00Z",
+	}
+
+	// Add keys to store
+	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, nil)
+	require.NoError(t, err)
+	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, nil)
+	require.NoError(t, err)
+
+	t.Run("OwnerCanGetOwnKey", func(t *testing.T) {
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/alice-key-1", nil)
+		c.Set("user", aliceUser)
+		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+		handler.GetAPIKey(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response ApiKey
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "alice-key-1", response.ID)
+		assert.Equal(t, "alice", response.Username)
+	})
+
+	t.Run("RegularUserCannotGetOthersKey_IDOR_Protection", func(t *testing.T) {
+		// Bob trying to access Alice's key
+		bobUser := &token.UserContext{
+			Username: "bob",
+			Groups:   []string{"tier-premium"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/alice-key-1", nil)
+		c.Set("user", bobUser)
+		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+		handler.GetAPIKey(c)
+
+		// IDOR Protection: Return 404 instead of 403 to prevent key enumeration
+		assert.Equal(t, http.StatusNotFound, w.Code)
+		var response map[string]string
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "API key not found", response["error"])
+	})
+
+	t.Run("AdminCanGetAnyKey", func(t *testing.T) {
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/alice-key-1", nil)
+		c.Set("user", adminUser)
+		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+		handler.GetAPIKey(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response ApiKey
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "alice-key-1", response.ID)
+		assert.Equal(t, "alice", response.Username)
+	})
+
+	t.Run("NonExistentKeyReturns404", func(t *testing.T) {
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/non-existent", nil)
+		c.Set("user", aliceUser)
+		c.Params = gin.Params{{Key: "id", Value: "non-existent"}}
+
+		handler.GetAPIKey(c)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+}
+
+// ============================================================
+// REVOKE API KEY HANDLER TESTS (DELETE /v1/api-keys/:id)
+// ============================================================
+
+// testRevokeKeySuccess is a helper to test successful key revocation.
+func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
+	t.Helper()
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	// Create alice's key
+	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/alice-key-1", nil)
+	c.Set("user", user)
+	c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+	handler.RevokeAPIKey(c)
+
+	// Per OpenAPI spec: returns 200 with revoked key metadata
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response ApiKey
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, "alice-key-1", response.ID)
+	assert.Equal(t, StatusRevoked, response.Status)
+
+	// Verify key is revoked in store
+	key, err := store.Get(context.Background(), "alice-key-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRevoked, key.Status)
+}
+
+func TestRevokeAPIKeyHandler(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("OwnerCanRevokeOwnKey", func(t *testing.T) {
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+		testRevokeKeySuccess(t, aliceUser)
+	})
+
+	t.Run("RegularUserCannotRevokeOthersKey_IDOR_Protection", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{}
+		service := NewServiceWithLogger(store, cfg, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+		// Create alice's key
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		require.NoError(t, err)
+
+		// Bob trying to revoke Alice's key
+		bobUser := &token.UserContext{
+			Username: "bob",
+			Groups:   []string{"tier-premium"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/alice-key-1", nil)
+		c.Set("user", bobUser)
+		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+		handler.RevokeAPIKey(c)
+
+		// IDOR Protection: Return 404 instead of 403 to prevent key enumeration
+		assert.Equal(t, http.StatusNotFound, w.Code)
+		var response map[string]string
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "API key not found", response["error"])
+
+		// Verify key was NOT revoked
+		key, err := store.Get(context.Background(), "alice-key-1")
+		require.NoError(t, err)
+		assert.Equal(t, StatusActive, key.Status)
+	})
+
+	t.Run("AdminCanRevokeAnyKey", func(t *testing.T) {
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users"},
+		}
+		testRevokeKeySuccess(t, adminUser)
+	})
+
+	t.Run("NonExistentKeyReturns404", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{}
+		service := NewServiceWithLogger(store, cfg, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/non-existent", nil)
+		c.Set("user", aliceUser)
+		c.Params = gin.Params{{Key: "id", Value: "non-existent"}}
+
+		handler.RevokeAPIKey(c)
+
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
+
+	t.Run("CannotRevokeAlreadyRevokedKey", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{}
+		service := NewServiceWithLogger(store, cfg, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+		// Create and immediately revoke alice's key
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, nil)
+		require.NoError(t, err)
+		err = store.Revoke(context.Background(), "alice-key-1")
+		require.NoError(t, err)
+
+		aliceUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"tier-free"},
+		}
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/alice-key-1", nil)
+		c.Set("user", aliceUser)
+		c.Params = gin.Params{{Key: "id", Value: "alice-key-1"}}
+
+		handler.RevokeAPIKey(c)
+
+		// Already revoked key returns 404 (not found among active keys)
+		assert.Equal(t, http.StatusNotFound, w.Code)
+	})
 }

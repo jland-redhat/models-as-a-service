@@ -55,7 +55,7 @@ type MetadataStore interface {
 	// Returns the count of keys that were revoked.
 	InvalidateAll(ctx context.Context, username string) (int, error)
 
-	// Revoke marks a specific API key as revoked (soft delete)
+	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error
 
 	// UpdateLastUsed updates the last_used_at timestamp for an API key

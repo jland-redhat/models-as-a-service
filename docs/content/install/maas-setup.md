@@ -2,15 +2,10 @@
 
 ## Prerequisites
 
-Before enabling MaaS in your DataScienceCluster, you **must** create a Secret with your PostgreSQL database connection:
+!!! warning "Database Required"
+    Before enabling MaaS, you **must** create the `maas-db-config` Secret with your PostgreSQL database connection URL.
 
-```bash
-kubectl create secret generic maas-db-config \
-  -n opendatahub \
-  --from-literal=DB_CONNECTION_URL='postgresql://username:password@hostname:5432/database?sslmode=require'
-```
-
-See the [Prerequisites Guide](prerequisites.md#database-prerequisite) for database options and detailed setup.
+    See the [Database Prerequisites](prerequisites.md#database-prerequisite) for detailed setup instructions and database options.
 
 ## Enable MaaS in DataScienceCluster
 

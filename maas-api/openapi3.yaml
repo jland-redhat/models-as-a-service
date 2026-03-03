@@ -426,7 +426,7 @@ paths:
             tags:
                 - api-keys-v2
             summary: Revoke a specific API key
-            description: Revokes (soft deletes) a specific API key by ID. The key will be marked as revoked and will no longer be valid for authentication.
+            description: Revokes a specific API key by changing its status to 'revoked'. The key will no longer be valid for authentication but remains visible in API key lists for audit purposes.
             operationId: api-keys-v2#delete
             parameters:
                 - in: path

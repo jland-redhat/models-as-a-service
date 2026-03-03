@@ -11,7 +11,7 @@ spec:
         runAsNonRoot: true
       containers:
       - name: maas-api
-        image: quay.io/isequeir/maas-api:api-key-20260302-190638
+        image: maas-api
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

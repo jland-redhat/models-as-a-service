@@ -15,7 +15,7 @@
     You must create a Secret named `maas-db-config` with the `DB_CONNECTION_URL` key before deploying.
 
     For development, the `scripts/deploy.sh` script creates this automatically.
-    For production ODH/RHOAI, see the [PostgreSQL Configuration Guide](../docs/content/configuration-and-management/POSTGRESQL_DEPLOYMENT.md).
+    For production ODH/RHOAI deployments, see [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite).
 
 ### Setup
 
@@ -243,39 +243,14 @@ curl -sSk \
 > [!NOTE]
 > API keys use hash-based storage (only SHA-256 hash stored, never plaintext). They are OpenAI-compatible (sk-oai-* format) and support optional expiration. API keys are stored in the configured database (see [Storage Configuration](#storage-configuration)) with metadata including creation date, expiration date, and status.
 
-### Storage Configuration
+### Database Configuration
 
-maas-api supports three storage modes, controlled by the `--storage` flag:
+maas-api uses PostgreSQL for persistent storage of API key metadata. The database connection is configured via a Kubernetes Secret.
 
-| Mode | Flag | Use Case | Persistence |
-|------|------|----------|-------------|
-| **In-memory** (default) | `--storage=in-memory` | Development/testing | ❌ Data lost on restart |
-| **Disk** | `--storage=disk` | Single replica, demos | ✅ Survives restarts |
-| **External** | `--storage=external` | Production, HA | ✅ Full persistence |
+!!! note "Automatic Setup"
+    When using `scripts/deploy.sh` for development, PostgreSQL is deployed automatically with the secret created.
 
-#### Quick Start
-
-```bash
-# In-memory (default - no configuration needed)
-
-# Disk storage (persistent, single replica)
-kustomize build deployment/overlays/tls-backend-disk | kubectl apply -f -
-
-# External database - see docs/samples/database/external for configuration
-```
-
-#### Configuration Flags and Environment Variables
-
-| Flag | Environment Variable | Default | Description |
-|------|---------------------|---------|-------------|
-| `--storage` | `STORAGE_MODE` | `in-memory` | Storage mode: `in-memory`, `disk`, or `external` |
-| `--db-connection-url` | `DB_CONNECTION_URL` | - | Database URL (required for `--storage=external`) |
-| `--data-path` | `DATA_PATH` | `/data/maas-api.db` | Path for disk storage |
-| - | `DB_MAX_OPEN_CONNS` | 25 | Max open connections (external mode only) |
-| - | `DB_MAX_IDLE_CONNS` | 5 | Max idle connections (external mode only) |
-| - | `DB_CONN_MAX_LIFETIME_SECONDS` | 300 | Connection max lifetime in seconds (external mode only) |
-
-For detailed external database setup instructions, see [docs/samples/database/external](../docs/samples/database/external/README.md).
+For production deployments, see the [Database Prerequisites](../docs/content/install/prerequisites.md#database-prerequisite) guide.
 
 #### Calling the model and hitting the rate limit
 

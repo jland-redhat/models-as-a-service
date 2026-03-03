@@ -150,12 +150,12 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 	var statusFilters []string
 	if filterStatus != "" {
 		statusFilters = strings.Split(filterStatus, ",")
-		// Validate each status
+		// Validate each status using allowlist
 		for _, status := range statusFilters {
 			trimmed := strings.TrimSpace(status)
-			if trimmed != "active" && trimmed != "revoked" && trimmed != "expired" {
+			if !ValidStatuses[trimmed] {
 				c.JSON(http.StatusBadRequest, gin.H{
-					"error": "invalid status filter: must be active, revoked, or expired",
+					"error": fmt.Sprintf("invalid status '%s': must be active, revoked, or expired", status),
 				})
 				return
 			}
@@ -226,7 +226,8 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 			"keyOwner", tok.Username,
 			"keyId", tokenID,
 		)
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: you can only view your own API keys"})
+		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
+		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 
@@ -369,7 +370,7 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 }
 
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
-// Revokes a specific permanent API key (soft delete).
+// Revokes a specific API key by changing its status to 'revoked'.
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	keyID := c.Param("id")
 	if keyID == "" {
@@ -402,7 +403,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 			"keyOwner", keyMetadata.Username,
 			"keyId", keyID,
 		)
-		c.JSON(http.StatusForbidden, gin.H{"error": "Access denied: you can only revoke your own API keys"})
+		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
+		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
 		return
 	}
 
@@ -418,7 +420,16 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	}
 
 	h.logger.Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
-	c.Status(http.StatusNoContent)
+
+	// Return the revoked key metadata (per OpenAPI spec)
+	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
+	if err != nil {
+		h.logger.Error("Failed to retrieve revoked key", "error", err, "keyId", keyID)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Key revoked but failed to retrieve metadata"})
+		return
+	}
+
+	c.JSON(http.StatusOK, revokedKey)
 }
 
 // SearchAPIKeys handles POST /v1/api-keys/search
@@ -452,13 +463,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		}
 	}
 
-	// Validate and apply defaults for filters
-	if len(req.Filters.Status) == 0 {
-		// ⚠️ BREAKING CHANGE: Default to active only
-		req.Filters.Status = []string{"active"}
-	}
-
-	// Validate status values
+	// Validate status values (if status not specified, all statuses are returned)
 	for _, status := range req.Filters.Status {
 		trimmed := strings.TrimSpace(status)
 		if !ValidStatuses[trimmed] {
