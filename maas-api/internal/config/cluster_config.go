@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
@@ -15,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -26,22 +28,25 @@ type ClusterConfig struct {
 	NamespaceLister      corev1listers.NamespaceLister
 	ServiceAccountLister corev1listers.ServiceAccountLister
 
-	// MaaSModelLister lists MaaSModel CRs from the informer cache for GET /v1/models.
-	MaaSModelLister models.MaaSModelLister
+	// MaaSModelRefLister lists MaaSModelRef CRs from the informer cache for GET /v1/models.
+	MaaSModelRefLister models.MaaSModelRefLister
 
 	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
 	MaaSSubscriptionLister subscription.Lister
+
+	// AdminChecker checks if a user is an admin based on Auth CR (services.opendatahub.io/v1alpha1).
+	AdminChecker *auth.AdminChecker
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
 }
 
-// maasModelLister implements models.MaaSModelLister from a cache.GenericLister (informer-backed).
-type maasModelLister struct {
+// maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
+type maasModelRefLister struct {
 	lister cache.GenericLister
 }
 
-func (m *maasModelLister) List(namespace string) ([]*unstructured.Unstructured, error) {
+func (m *maasModelRefLister) List(namespace string) ([]*unstructured.Unstructured, error) {
 	objs, err := m.lister.List(labels.Everything())
 	if err != nil {
 		return nil, err
@@ -104,16 +109,26 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 	nsInformer := coreFactory.Core().V1().Namespaces()
 	saInformer := coreFactory.Core().V1().ServiceAccounts()
 
-	// MaaSModel informer (cached); watches all namespaces so we can list any namespace from cache.
+	// MaaSModelRef informer (cached); watches all namespaces so we can list any namespace from cache.
 	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 	maasGVR := models.GVR()
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
-	maasModelListerVal := &maasModelLister{lister: maasInformer.Lister()}
+	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
 
 	// MaaSSubscription informer (cached); watches all namespaces for subscription selection.
 	subscriptionGVR := subscription.GVR()
 	subscriptionInformer := maasDynamicFactory.ForResource(subscriptionGVR)
 	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
+
+	// Auth CR informer (cluster-scoped); used to determine admin groups from services.platform.opendatahub.io/v1alpha1/Auth.
+	// The Auth CR is a singleton named "auth" that defines adminGroups and allowedGroups.
+	authGVR := schema.GroupVersionResource{
+		Group:    "services.platform.opendatahub.io",
+		Version:  "v1alpha1",
+		Resource: "auths",
+	}
+	authInformer := maasDynamicFactory.ForResource(authGVR)
+	adminCheckerVal := auth.NewAdminChecker(authInformer.Lister())
 
 	return &ClusterConfig{
 		ClientSet: clientset,
@@ -122,8 +137,9 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 		NamespaceLister:      nsInformer.Lister(),
 		ServiceAccountLister: saInformer.Lister(),
 
-		MaaSModelLister:        maasModelListerVal,
+		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
+		AdminChecker:           adminCheckerVal,
 
 		informersSynced: []cache.InformerSynced{
 			cmInformer.Informer().HasSynced,
@@ -131,6 +147,7 @@ func NewClusterConfig(namespace string, resyncPeriod time.Duration) (*ClusterCon
 			saInformer.Informer().HasSynced,
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,
+			authInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			coreFactory.Start,

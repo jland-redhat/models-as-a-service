@@ -38,7 +38,7 @@ const (
 	maxDiscoveryConcurrency = 10
 )
 
-// Manager runs access validation (probe model endpoints) for models listed from MaaSModel.
+// Manager runs access validation (probe model endpoints) for models listed from MaaSModelRef.
 type Manager struct {
 	logger     *logger.Logger
 	httpClient *http.Client
@@ -65,13 +65,13 @@ func NewManager(log *logger.Logger) (*Manager, error) {
 }
 
 // FilterModelsByAccess returns only models the user can access by probing each model's
-// /v1/models endpoint with the given Authorization header (passed through as-is). 2xx or 405 → include, 401/403/404 → exclude.
+// /v1/models endpoint with the given Authorization and x-maas-subscription headers (passed through as-is). 2xx or 405 → include, 401/403/404 → exclude.
 // Models with nil URL are skipped. Concurrency is limited by maxDiscoveryConcurrency.
-func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, authHeader string) []Model {
+func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, authHeader string, subscriptionHeader string) []Model {
 	if len(models) == 0 {
 		return models
 	}
-	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models))
+	m.logger.Debug("FilterModelsByAccess: validating access for models", "count", len(models), "subscriptionHeaderProvided", subscriptionHeader != "")
 	var out []Model
 	var mu sync.Mutex
 	g, ctx := errgroup.WithContext(ctx)
@@ -102,8 +102,8 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 			Created:     model.Created,
 		}
 		g.Go(func() error {
-			if discovered := m.fetchModelsWithRetry(ctx, authHeader, meta); discovered != nil {
-				// Use model names from the backend's /v1/models response instead of MaaSModel metadata.name
+			if discovered := m.fetchModelsWithRetry(ctx, authHeader, subscriptionHeader, meta); discovered != nil {
+				// Use model names from the backend's /v1/models response instead of MaaSModelRef metadata.name
 				converted := discoveredToModels(discovered, model)
 				mu.Lock()
 				out = append(out, converted...)
@@ -129,8 +129,8 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 // 5xx/other → retry (authRetry).
 
 // discoveredToModels converts backend /v1/models response to our Model type, using the backend's
-// model names (id) and preserving URL, Ready, Kind from the original MaaSModel-derived model.
-// If the backend returns no models, falls back to the original model (MaaSModel metadata.name).
+// model names (id) and preserving URL, Ready, Kind from the original MaaSModelRef-derived model.
+// If the backend returns no models, falls back to the original model (MaaSModelRef metadata.name).
 func discoveredToModels(discovered []openai.Model, original Model) []Model {
 	if len(discovered) == 0 {
 		return []Model{original}
@@ -170,7 +170,7 @@ func discoveredToModels(discovered []openai.Model, original Model) []Model {
 
 // modelMetadata holds the data needed to probe a model endpoint and to enrich the response when applicable.
 type modelMetadata struct {
-	Kind        string    // model ref kind, e.g. "llmisvc" (from MaaSModel spec.modelRef.kind)
+	Kind        string    // model ref kind, e.g. "llmisvc" (from MaaSModelRef spec.modelRef.kind)
 	ServiceName string    // for logging and error messages
 	ModelName   string    // model id for 405 fallback response
 	Endpoint    string    // full URL to GET (e.g. base + /v1/models)
@@ -181,11 +181,12 @@ type modelMetadata struct {
 	Created     int64
 }
 
-func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, meta modelMetadata) []openai.Model {
+func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, subscriptionHeader string, meta modelMetadata) []openai.Model {
 	m.logger.Debug("Validating access: probing model endpoint",
 		"service", meta.ServiceName,
 		"endpoint", meta.Endpoint,
 		"kind", meta.Kind,
+		"subscriptionHeaderProvided", subscriptionHeader != "",
 	)
 	backoff := wait.Backoff{
 		Steps:    4,
@@ -200,7 +201,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, m
 	if err := wait.ExponentialBackoffWithContext(ctx, backoff, func(ctx context.Context) (bool, error) {
 		var models []openai.Model
 		var authRes authResult
-		models, authRes = m.fetchModels(ctx, authHeader, meta)
+		models, authRes = m.fetchModels(ctx, authHeader, subscriptionHeader, meta)
 		if authRes == authGranted {
 			result = models
 		}
@@ -219,7 +220,7 @@ func (m *Manager) fetchModelsWithRetry(ctx context.Context, authHeader string, m
 	return result
 }
 
-func (m *Manager) fetchModels(ctx context.Context, authHeader string, meta modelMetadata) ([]openai.Model, authResult) {
+func (m *Manager) fetchModels(ctx context.Context, authHeader string, subscriptionHeader string, meta modelMetadata) ([]openai.Model, authResult) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, meta.Endpoint, nil)
 	if err != nil {
 		m.logger.Debug("Access validation: failed to create GET request", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
@@ -227,7 +228,11 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, meta model
 	}
 
 	req.Header.Set("Authorization", authHeader)
+	if subscriptionHeader != "" {
+		req.Header.Set("X-Maas-Subscription", subscriptionHeader)
+	}
 
+	// #nosec G704 -- Intentional HTTP request to probe model endpoint for authorization check
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		m.logger.Debug("Access validation: GET request failed", "service", meta.ServiceName, "endpoint", meta.Endpoint, "error", err)
@@ -240,6 +245,7 @@ func (m *Manager) fetchModels(ctx context.Context, authHeader string, meta model
 		"endpoint", meta.Endpoint,
 		"statusCode", resp.StatusCode,
 		"authHeaderLen", len(authHeader),
+		"subscriptionHeaderProvided", subscriptionHeader != "",
 	)
 	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusUnauthorized {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))

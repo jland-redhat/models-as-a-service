@@ -7,6 +7,12 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+# Database configuration secret
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["maas-db-config"]
+  verbs: ["get"]
+
 # SA token provider resources
 - apiGroups: [""]
   resources: ["namespaces"]
@@ -26,7 +32,7 @@ rules:
 
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasmodels", "maassubscriptions"]
+  resources: ["maasmodelrefs", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
 
 # HTTPRoutes (for future use, e.g. listing or resolving model routes)
