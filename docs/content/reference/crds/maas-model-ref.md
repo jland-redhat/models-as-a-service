@@ -12,7 +12,7 @@ Represents an AI/ML model endpoint in the MaaS catalog. The MaaS API lists model
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| kind | string | Yes | One of: `LLMInferenceService`, `ExternalModel` (not yet implemented -- setting this kind will result in Phase=Failed with Reason=Unsupported) |
+| kind | string | Yes | One of: `LLMInferenceService`, `ExternalModel` |
 | name | string | Yes | Name of the model resource |
 | namespace | string | No | Namespace of the model resource (defaults to same namespace as MaaSModelRef) |
 
