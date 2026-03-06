@@ -2015,7 +2015,7 @@
 <h2 id="architecture">Architecture</h2>
 <h3 id="high-level-architecture">🏗️ High-Level Architecture</h3>
 <p>The MaaS Platform is an end-to-end solution built on <a href="https://docs.kuadrant.io/">Kuadrant</a>.</p>
-<p>All traffic flows through the Gateway    <strong>maas-default-gateway</strong> (Gateway API). Then utilizes <a href="https://docs.kuadrant.io/1.0.x/authorino/">Authorino</a> to enforcing authentication, authorization and <a href="https://docs.kuadrant.io/1.0.x/limitador/">Limitador</a> to enforce and track token usage. Auth policies use <strong>caching</strong> (e.g., subscription selection results, API key validation) to reduce latency on the hot path.</p>
+<p>All traffic flows through the Gateway    <strong>maas-default-gateway</strong> (Gateway API). Then utilizes <a href="https://docs.kuadrant.io/1.0.x/authorino/">Authorino</a> to enforce authentication, authorization and <a href="https://docs.kuadrant.io/1.0.x/limitador/">Limitador</a> to enforce and track token usage. Auth policies use <strong>caching</strong> (e.g., subscription selection results, API key validation) to reduce latency on the hot path.</p>
 <p><strong>Main Flows:</strong></p>
 <ul>
 <li><strong>Key Minting</strong> — For obtaining API keys to authenticate programmatic access. </li>
@@ -2068,7 +2068,7 @@
 <h3 id="key-minting-flow-request-validation">Key Minting Flow — Request &amp; Validation</h3>
 <p><strong>Flow summary:</strong></p>
 <ol>
-<li>User sends <code>POST /v1/api-keys</code> with Bearer <code>{oc-token}</code>.</li>
+<li>User sends <code>POST /maas-api/v1/api-keys</code> with Bearer <code>{oc-token}</code>.</li>
 <li>Gateway routes the request to AuthPolicy (Authorino).</li>
 <li>AuthPolicy validates the OpenShift token via TokenReview.</li>
 <li>Gateway forwards the authenticated request and user context to the Key Minting Service.</li>
@@ -2087,7 +2087,7 @@
         KMS[MaaS API]
     end
 
-    U --&gt;|"1. POST /v1/api-keys&lt;br/&gt;Bearer {oc-token}"| G
+    U --&gt;|"1. POST /maas-api/v1/api-keys&lt;br/&gt;Bearer {oc-token}"| G
     G --&gt;|"2. Route /maas-api"| AP
     AP --&gt;|"3. TokenReview&lt;br/&gt;validate OpenShift token"| G
     G --&gt;|"4. Forward + user context"| KMS
@@ -2339,7 +2339,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 5, 2026 21:13:36 UTC">March 5, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 6, 2026 02:29:14 UTC">March 6, 2026</span>
   </span>
 
     
