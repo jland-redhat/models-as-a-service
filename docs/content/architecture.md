@@ -10,7 +10,7 @@ The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Ga
 
 The MaaS Platform is an end-to-end solution built on [Kuadrant](https://docs.kuadrant.io/).
 
-All traffic flows through the Gateway    **maas-default-gateway** (Gateway API). Then utilizes [Authorino](https://docs.kuadrant.io/1.0.x/authorino/) to enforcing authentication, authorization and [Limitador](https://docs.kuadrant.io/1.0.x/limitador/) to enforce and track token usage. Auth policies use **caching** (e.g., subscription selection results, API key validation) to reduce latency on the hot path.
+All traffic flows through the Gateway    **maas-default-gateway** (Gateway API). Then utilizes [Authorino](https://docs.kuadrant.io/1.0.x/authorino/) to enforce authentication, authorization and [Limitador](https://docs.kuadrant.io/1.0.x/limitador/) to enforce and track token usage. Auth policies use **caching** (e.g., subscription selection results, API key validation) to reduce latency on the hot path.
 
 **Main Flows:**
 
@@ -68,7 +68,7 @@ graph TB
 
 **Flow summary:**
 
-1. User sends `POST /v1/api-keys` with Bearer `{oc-token}`.
+1. User sends `POST /maas-api/v1/api-keys` with Bearer `{oc-token}`.
 2. Gateway routes the request to AuthPolicy (Authorino).
 3. AuthPolicy validates the OpenShift token via TokenReview.
 4. Gateway forwards the authenticated request and user context to the Key Minting Service.
@@ -88,7 +88,7 @@ graph TB
         KMS[MaaS API]
     end
     
-    U -->|"1. POST /v1/api-keys<br/>Bearer {oc-token}"| G
+    U -->|"1. POST /maas-api/v1/api-keys<br/>Bearer {oc-token}"| G
     G -->|"2. Route /maas-api"| AP
     AP -->|"3. TokenReview<br/>validate OpenShift token"| G
     G -->|"4. Forward + user context"| KMS

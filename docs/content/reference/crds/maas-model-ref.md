@@ -24,4 +24,7 @@ Represents an AI/ML model endpoint in the MaaS catalog. The MaaS API lists model
 | endpoint | string | Endpoint URL for the model |
 | httpRouteName | string | Name of the HTTPRoute associated with this model |
 | httpRouteNamespace | string | Namespace of the HTTPRoute |
+| httpRouteGatewayName | string | Name of the Gateway that the HTTPRoute references |
+| httpRouteGatewayNamespace | string | Namespace of the Gateway that the HTTPRoute references |
+| httpRouteHostnames | []string | Hostnames configured on the HTTPRoute |
 | conditions | []Condition | Latest observations of the model's state |
