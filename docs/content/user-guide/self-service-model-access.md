@@ -44,7 +44,7 @@ echo $API_KEY
 ```
 
 !!! warning "API key shown only once"
-    The plaintext API key is returned **only at creation time**. Store it securely—it cannot be retrieved again.
+    The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](../install/troubleshooting.md).
 
 ### API Key Lifecycle
 
@@ -56,7 +56,7 @@ echo $API_KEY
 
 ### List Available Models
 
-Get a list of models available to your tier:
+Get a list of models available to your subscription:
 
 ```bash
 MODELS=$(curl "${MAAS_API_URL}/v1/models" \
@@ -75,13 +75,13 @@ Example response:
       "id": "simulator",
       "name": "Simulator Model",
       "url": "https://gateway.your-domain.com/simulator/v1/chat/completions",
-      "tier": "free"
+      "subscription": "free"
     },
     {
       "id": "qwen3",
       "name": "Qwen3 Model",
       "url": "https://gateway.your-domain.com/qwen3/v1/chat/completions",
-      "tier": "premium"
+      "subscription": "premium"
     }
   ]
 }
@@ -154,20 +154,14 @@ curl -sSk --no-buffer \
 
 ## Understanding Your Access Level
 
-Your access is determined by your **tier**, which controls:
+Your access is determined by your **subscription**, which controls:
 
 - **Available models** - Which AI models you can use
 - **Request limits** - How many requests per minute
 - **Token limits** - Maximum tokens per request
 - **Features** - Advanced capabilities available
 
-### Default Tiers
-
-| Tier | Requests/min | Tokens/min |
-|------|--------------|------------|
-| Free | 5 | 100 |
-| Premium | 20 | 50,000 |
-| Enterprise | 50 | 100,000 |
+Rate limits are configured per-model in MaaSAuthPolicy and MaaSSubscription. Contact your administrator for your subscription's limits.
 
 ## Error Handling
 
@@ -242,13 +236,13 @@ curl -I -sSk \
 
 **Problem**: `429 Too Many Requests`
 
-**Solution**: Wait before making more requests, or contact your administrator to upgrade your tier.
+**Solution**: Wait before making more requests, or contact your administrator to adjust your subscription limits.
 
 ### Model Not Available
 
 **Problem**: `404 Model Not Found`
 
-**Solution**: Check which models are available in your tier:
+**Solution**: Check which models are available in your subscription:
 
 ```bash
 curl -X GET "${MAAS_API_URL}/v1/models" \

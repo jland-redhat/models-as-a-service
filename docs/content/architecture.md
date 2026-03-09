@@ -255,7 +255,7 @@ Token usage and rate-limit data flow from Limitador into Prometheus and onward t
 
 **Flow summary:**
 
-1. Limitador stores token usage counters (e.g., `authorized_hits`, `authorized_calls`, `limited_calls`) with labels (`user`, `tier`, `model`).
+1. Limitador stores token usage counters (e.g., `authorized_hits`, `authorized_calls`, `limited_calls`) with labels (`user`, `model`).
 2. A ServiceMonitor (or Kuadrant PodMonitor) configures Prometheus to scrape Limitador's `/metrics` endpoint.
 3. Prometheus stores the metrics in its time-series database.
 4. Grafana (or other visualization tools) queries Prometheus to build dashboards for usage, billing, and operational health.

@@ -2,13 +2,8 @@
 
 This guide provides instructions for validating and testing your MaaS Platform deployment.
 
-## Namespace Reference
-
-| Component | RHOAI | ODH |
-|-----------|-------|-----|
-| MaaS API | redhat-ods-applications | opendatahub |
-| Kuadrant/RHCL | kuadrant-system | kuadrant-system |
-| Gateway | openshift-ingress | openshift-ingress |
+!!! note "Prerequisite"
+    At least one model must be deployed to validate the installation. See [Model Setup](model-setup.md) to deploy sample models.
 
 ## Manual Validation (Recommended)
 
@@ -45,15 +40,12 @@ echo "API key obtained: ${API_KEY:0:20}..."
 ```
 
 !!! warning "API key shown only once"
-    The plaintext API key is returned **only at creation time**. Store it securely—it cannot be retrieved again.
+    The plaintext API key is returned **only at creation time**. We do not store the API key, so there is no way to retrieve it again. Store it securely when it is displayed. If you run into errors, see [Troubleshooting](troubleshooting.md).
 
 !!! note
     For more information about API keys, see [Understanding Token Management](../configuration-and-management/token-management.md).
 
 ### 3. List Available Models
-
-!!! warning "Known issue"
-    The list models endpoint is currently experiencing issues. If you encounter problems, see [Troubleshooting](#troubleshooting) below.
 
 Set the subscription name (required when your API key matches multiple subscriptions; use the name from your MaaSSubscription CR):
 
@@ -109,32 +101,7 @@ for i in {1..16}; do
 done
 ```
 
-### 7. Verify Component Status
-
-Check that all components are running:
-
-```bash
-kubectl get pods -n maas-api && \
-kubectl get pods -n kuadrant-system && \
-kubectl get pods -n kserve && \
-kubectl get pods -n llm
-```
-
-Check Gateway status:
-
-```bash
-kubectl get gateway -n openshift-ingress maas-default-gateway
-```
-
-Check that policies are enforced:
-
-```bash
-kubectl get authpolicy -A && \
-kubectl get tokenratelimitpolicy -A && \
-kubectl get llminferenceservices -n llm
-```
-
-See the deployment scripts documentation at `scripts/README.md` for more information about validation and troubleshooting.
+See the deployment scripts documentation at `scripts/README.md` and the [Troubleshooting](troubleshooting.md) guide for more information.
 
 ## Automated Validation
 
@@ -171,55 +138,4 @@ kubectl run curl --rm -it --image=curlimages/curl -- \
 
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
 
-## Troubleshooting
-
-### Common Issues
-
-1. **Getting `501` Not Implemented errors**: Traffic is not making it to the Gateway.
-      - [ ] Verify Gateway status and HTTPRoute configuration
-2. **Getting `401` Unauthorized errors when trying to create an API key**: Authentication to maas-api is not working.
-      - [ ] Verify `maas-api-auth-policy` AuthPolicy is applied
-      - [ ] Check if your cluster uses a custom token review audience:
-
-      ```bash
-      # Detect your cluster's audience
-      AUD="$(kubectl create token default --duration=10m 2>/dev/null | \
-        cut -d. -f2 | jq -Rr '@base64d | fromjson | .aud[0]' 2>/dev/null)"
-      echo "Cluster audience: ${AUD}"
-      ```
-
-      If the audience is NOT `https://kubernetes.default.svc`, patch the AuthPolicy:
-
-      ```bash
-      # For RHOAI:
-      kubectl patch authpolicy maas-api-auth-policy -n redhat-ods-applications \
-        --type=merge --patch "
-      spec:
-        rules:
-          authentication:
-            openshift-identities:
-              kubernetesTokenReview:
-                audiences:
-                  - ${AUD}
-                  - maas-default-gateway-sa"
-      ```
-
-      For ODH, use namespace `opendatahub` instead of `redhat-ods-applications`.
-3. **Getting `401` errors when trying to get models**: Authentication is not working for the models endpoint.
-      - [ ] Create a new API key and use it in the Authorization header
-      - [ ] Verify `gateway-auth-policy` AuthPolicy is applied
-      - [ ] Validate that `system:serviceaccounts:maas-default-gateway-tier-{TIER}` has `post` access to the `llminferenceservices` resource
-        - Note: this should be automated by the ODH Controller
-4. **Getting `404` errors when trying to get models**: The models endpoint is not working.
-      - [ ] Verify `model-route` HTTPRoute exist and is applied
-      - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
-      - [ ] Verify that the model is recognized by maas-api by checking the `maas-api/v1/models` endpoint (see [List Available Models](#3-list-available-models))
-5. **Rate limiting not working**: Verify AuthPolicy and TokenRateLimitPolicy are applied
-      - [ ] Verify `gateway-rate-limits` RateLimitPolicy is applied
-      - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
-      - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
-      - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Test Rate Limiting](#6-test-rate-limiting))
-      - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Test Rate Limiting](#6-test-rate-limiting))
-6. **Routes not accessible (503 errors)**: Check MaaS Default Gateway status and HTTPRoute configuration
-      - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
-      - [ ] Check HTTPRoute configuration and status
+For troubleshooting common issues, see [Troubleshooting](troubleshooting.md).

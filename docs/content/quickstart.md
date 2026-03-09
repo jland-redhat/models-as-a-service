@@ -3,7 +3,7 @@
 This guide provides quickstart instructions for deploying the MaaS Platform infrastructure.
 
 !!! note
-    For more detailed instructions, please refer to [Installation under the Administrator Guide](install/prerequisites.md).
+    For more detailed instructions, please refer to [Installation under the Install Guide](install/prerequisites.md).
 
 ## Prerequisites
 
@@ -126,86 +126,6 @@ kubectl get pods -n redhat-ods-applications
 
 For detailed validation and troubleshooting, see the [Validation Guide](install/validation.md).
 
-## Model Setup
-
-!!! note
-    At least one model must be deployed to validate the installation using the [Validation Guide](install/validation.md).
-
-!!! tip "Create llm namespace (optional)"
-    Models deploy to the `llm` namespace. If it does not exist, create it first (idempotent—safe to run even if it already exists):
-
-    ```bash
-    kubectl create namespace llm --dry-run=client -o yaml | kubectl apply -f -
-    ```
-
-### Deploy Sample Models
-
-#### Simulator Model (CPU)
-
-A lightweight mock service for testing that generates responses without running an actual language model. This deploys the simulator with MaaS policies (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription) so it is discoverable and usable through the MaaS API.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/maas-system/free/ | kubectl apply -f -
-```
-
-#### Facebook OPT-125M Model (CPU)
-
-An inference deployment that loads and runs a 125M parameter model without the need for a GPU.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/facebook-opt-125m-cpu/ | kubectl apply -f -
-```
-
-#### Qwen3 Model (GPU Required)
-
-⚠️ This model requires GPU nodes with `nvidia.com/gpu` resources available in your cluster.
-
-```bash
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/docs/samples/models/qwen3/ | kubectl apply -f -
-```
-
-#### Verify Model Deployment
-
-```bash
-# Check LLMInferenceService status
-kubectl get llminferenceservices -n llm
-
-# Check pods
-kubectl get pods -n llm
-```
-
-#### Update Existing Models (Optional)
-
-To update an existing model, modify the `LLMInferenceService` to use the newly created `maas-default-gateway` gateway.
-
-```bash
-kubectl patch llminferenceservice my-production-model -n llm --type='json' -p='[
-  {
-    "op": "add",
-    "path": "/spec/gateway/refs/-",
-    "value": {
-      "name": "maas-default-gateway",
-      "namespace": "openshift-ingress"
-    }
-  }
-]'
-```
-
-```yaml
-apiVersion: serving.kserve.io/v1alpha1
-kind: LLMInferenceService
-metadata:
-  name: my-production-model
-spec:
-  gateway:
-    refs:
-      - name: maas-default-gateway
-        namespace: openshift-ingress
-```
-
 ## Next Steps
 
-After installation, proceed to [Validation](install/validation.md) to test and verify your deployment.
+After deployment, proceed to [Model Setup](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
