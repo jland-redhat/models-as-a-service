@@ -22,7 +22,6 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -31,19 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
-
-// authPolicyTestRESTMapper builds a REST mapper that covers all GVKs exercised in
-// these tests, including the Kuadrant AuthPolicy which is not registered in the scheme.
-func authPolicyTestRESTMapper() apimeta.RESTMapper {
-	m := apimeta.NewDefaultRESTMapper(nil)
-	ns := nsRestScope{}
-	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModel"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
-	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
-	return m
-}
 
 // newPreexistingAuthPolicy builds a Kuadrant AuthPolicy as an unstructured object
 // with a sentinel value in spec.targetRef.name. Tests use this to detect whether
@@ -103,34 +89,21 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			model := &maasv1alpha1.MaaSModelRef{
-				ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSModelSpec{
-					ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
-				},
-			}
-			route := &gatewayapiv1.HTTPRoute{
-				ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: namespace},
-			}
-			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
-				ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
-				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []string{modelName},
-					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
-				},
-			}
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 			// Pre-populate the store with a generated AuthPolicy whose spec contains a
 			// sentinel targetRef. After reconciliation we check whether it changed.
 			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithRESTMapper(authPolicyTestRESTMapper()).
+				WithRESTMapper(testRESTMapper()).
 				WithObjects(model, route, maasPolicy, existingAP).
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -156,6 +129,69 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_DuplicateReconciliation verifies that reconciling
+// multiple auth policies for the same model does not produce redundant AuthPolicy updates.
+//
+// When N auth policies reference the same model, each reconciliation builds the same
+// aggregated AuthPolicy. The controller must skip the Update call when the content is
+// identical to what already exists, otherwise each Update triggers a watch event that
+// cascades into O(N²) reconciliations.
+func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	policyA := newMaaSAuthPolicy("policy-a", namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+	policyB := newMaaSAuthPolicy("policy-b", namespace, "team-b", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policyA, policyB).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	ctx := context.Background()
+
+	// Reconcile policy-a: creates the aggregated AuthPolicy (covering both policy-a and policy-b).
+	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-a", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqA); err != nil {
+		t.Fatalf("Reconcile policy-a: %v", err)
+	}
+
+	// Capture AuthPolicy ResourceVersion after first reconciliation.
+	ap := &unstructured.Unstructured{}
+	ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
+		t.Fatalf("Get AuthPolicy after policy-a reconcile: %v", err)
+	}
+	rvAfterA := ap.GetResourceVersion()
+
+	// Reconcile policy-b: both policies are still present, so the aggregated AuthPolicy
+	// content is identical. The controller should detect this and skip the Update.
+	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-b", Namespace: namespace}}
+	if _, err := r.Reconcile(ctx, reqB); err != nil {
+		t.Fatalf("Reconcile policy-b: %v", err)
+	}
+
+	if err := c.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: namespace}, ap); err != nil {
+		t.Fatalf("Get AuthPolicy after policy-b reconcile: %v", err)
+	}
+	rvAfterB := ap.GetResourceVersion()
+
+	if rvAfterA != rvAfterB {
+		t.Errorf("redundant AuthPolicy update: ResourceVersion changed from %s to %s; "+
+			"reconciling policy-b should not update the AuthPolicy when content is identical to policy-a's reconciliation",
+			rvAfterA, rvAfterB)
 	}
 }
 
@@ -197,21 +233,12 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 			existingAP := newPreexistingAuthPolicy(authPolicyName, namespace, modelName, tc.annotations)
 
 			// Create MaaSAuthPolicy with finalizer so handleDeletion processes it.
-			maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:       maasPolicyName,
-					Namespace:  namespace,
-					Finalizers: []string{maasAuthPolicyFinalizer},
-				},
-				Spec: maasv1alpha1.MaaSAuthPolicySpec{
-					ModelRefs: []string{modelName},
-					Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
-				},
-			}
+			maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+			maasPolicy.Finalizers = []string{maasAuthPolicyFinalizer}
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithRESTMapper(authPolicyTestRESTMapper()).
+				WithRESTMapper(testRESTMapper()).
 				WithObjects(maasPolicy, existingAP).
 				Build()
 
@@ -221,7 +248,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSAuthPolicy: %v", err)
 			}
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -243,3 +270,116 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 		})
 	}
 }
+// TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion verifies that when multiple
+// MaaSAuthPolicies reference the same model, deleting one does not delete the aggregated
+// AuthPolicy, but deleting the last one does.
+func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
+	const (
+		modelName      = "shared-model"
+		modelNamespace = "llm"
+		httpRouteName  = "maas-model-" + modelName
+		authPolicyName = "maas-auth-" + modelName
+		policy1Name    = "policy-1"
+		policy2Name    = "policy-2"
+		policyNS       = "opendatahub"
+	)
+
+	// Create model and HTTPRoute
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelName, Namespace: modelNamespace},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "ExternalModel", Name: modelName},
+		},
+	}
+	route := &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: modelNamespace},
+	}
+
+	// Create two MaaSAuthPolicies both referencing the same model
+	policy1 := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       policy1Name,
+			Namespace:  policyNS,
+			Finalizers: []string{maasAuthPolicyFinalizer},
+		},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: modelNamespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-1"}}},
+		},
+	}
+	policy2 := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       policy2Name,
+			Namespace:  policyNS,
+			Finalizers: []string{maasAuthPolicyFinalizer},
+		},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: []maasv1alpha1.ModelRef{{Name: modelName, Namespace: modelNamespace}},
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-2"}}},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policy1, policy2).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+
+	// Reconcile both policies to create the aggregated AuthPolicy
+	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy1Name, Namespace: policyNS}}
+	if _, err := r.Reconcile(context.Background(), req1); err != nil {
+		t.Fatalf("Reconcile policy1: %v", err)
+	}
+	req2 := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy2Name, Namespace: policyNS}}
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile policy2: %v", err)
+	}
+
+	// Verify aggregated AuthPolicy was created
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy); err != nil {
+		t.Fatalf("AuthPolicy not found before deletion: %v", err)
+	}
+
+	// Delete policy1 (but policy2 still exists)
+	if err := c.Delete(context.Background(), policy1); err != nil {
+		t.Fatalf("Delete policy1: %v", err)
+	}
+	// Reconcile policy1 deletion - this will delete the aggregated AuthPolicy
+	if _, err := r.Reconcile(context.Background(), req1); err != nil {
+		t.Fatalf("Reconcile policy1 deletion: %v", err)
+	}
+
+	// Reconcile policy2 so it recreates the AuthPolicy without policy1's subjects
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile policy2 after policy1 deletion: %v", err)
+	}
+
+	// Aggregated AuthPolicy should exist again (rebuilt by policy2)
+	authPolicy = &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy); err != nil {
+		t.Errorf("AuthPolicy should be rebuilt by policy2 after policy1 deletion: %v", err)
+	}
+
+	// Now delete policy2 (the last one)
+	if err := c.Delete(context.Background(), policy2); err != nil {
+		t.Fatalf("Delete policy2: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req2); err != nil {
+		t.Fatalf("Reconcile policy2 deletion: %v", err)
+	}
+
+	// Aggregated AuthPolicy should NOW BE DELETED (no remaining parents)
+	authPolicy = &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	err := c.Get(context.Background(), types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("AuthPolicy should be deleted after deleting last parent policy, but got error: %v", err)
+	}
+}
+

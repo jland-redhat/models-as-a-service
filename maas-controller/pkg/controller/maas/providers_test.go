@@ -25,6 +25,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -45,6 +46,58 @@ var scheme = runtime.NewScheme()
 type nsRestScope struct{}
 
 func (nsRestScope) Name() apimeta.RESTScopeName { return apimeta.RESTScopeNameNamespace }
+
+// testRESTMapper builds a REST mapper covering all GVKs exercised across
+// controller tests, including Kuadrant types that are not registered in the scheme.
+func testRESTMapper() apimeta.RESTMapper {
+	m := apimeta.NewDefaultRESTMapper(nil)
+	ns := nsRestScope{}
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModel"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicyList"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
+	return m
+}
+
+// newHTTPRoute creates a plain HTTPRoute (no labels or parent refs).
+// Used by ExternalModel tests where KServe labels are not expected.
+func newHTTPRoute(name, ns string) *gatewayapiv1.HTTPRoute {
+	return &gatewayapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+	}
+}
+
+// newMaaSSubscription creates a MaaSSubscription with a single owner group and a single
+// model ref with the given token rate limit. The model namespace defaults to the
+// subscription's namespace (ns).
+func newMaaSSubscription(name, ns, group, modelName string, limit int64) *maasv1alpha1.MaaSSubscription {
+	return &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{
+				Groups: []maasv1alpha1.GroupReference{{Name: group}},
+			},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelName, Namespace: ns, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: limit, Window: "1m"}}},
+			},
+		},
+	}
+}
+
+// newMaaSAuthPolicy creates a MaaSAuthPolicy with a single subject group and the given model refs.
+func newMaaSAuthPolicy(name, ns, group string, modelRefs ...maasv1alpha1.ModelRef) *maasv1alpha1.MaaSAuthPolicy {
+	return &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs: modelRefs,
+			Subjects:  maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: group}}},
+		},
+	}
+}
 
 func TestGetBackendHandler_UnknownKind_ReturnsNil(t *testing.T) {
 	r := &MaaSModelRefReconciler{}
