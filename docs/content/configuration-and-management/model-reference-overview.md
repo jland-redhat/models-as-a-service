@@ -1,4 +1,4 @@
-# MaaSModelRef Configuration
+# Model Reference Overview
 
 This guide covers how to create and configure **MaaSModelRef** resources to identify models on the cluster. For the conceptual overview, see [MaaS Models](maas-models.md).
 
@@ -75,6 +75,6 @@ Both MaaSAuthPolicy and MaaSSubscription reference models by **MaaSModelRef `met
 
 - [MaaS Models](maas-models.md) — Conceptual overview
 - [Access and Quota Overview](subscription-overview.md) — How policies and subscriptions work together
-- [MaaSSubscription Configuration](maas-subscription-configuration.md) — Subscription setup
+- [Quota Configuration Overview](quota-configuration-overview.md) — Subscription setup
 - [MaaSAuthPolicy Configuration](maas-auth-policy-configuration.md) — Access configuration
 - [MaaSModelRef CRD](../reference/crds/maas-model-ref.md) — Full CRD schema reference

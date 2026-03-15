@@ -1,6 +1,6 @@
 # MaaS Models
 
-MaaS uses **MaaSModelRef** to identify models that live on the cluster. Each MaaSModelRef is a reference to a model server—it holds the information MaaS needs to perform authentication, authorization, and rate limiting.
+MaaS uses **MaaSModelRef** to identify model servers that live on the cluster. Each MaaSModelRef is a reference to a model server—it holds the information MaaS needs to perform authentication, authorization, and rate limiting.
 
 By using a single unified object (MaaSModelRef) for all model types, MaaS can handle different kinds of model servers—each with its own backend and lifecycle—through one consistent interface. The controller uses a **provider paradigm** to distinguish between types: each model type (for example, LLMInferenceService, external APIs) has a provider that knows how to reconcile and resolve that type. Today, vLLM (via LLMInferenceService) is the supported provider; additional providers may be added in the future.
 
@@ -47,4 +47,4 @@ flowchart LR
 - **MaaSAuthPolicy** and **MaaSSubscription** — Reference models by name and use that information to enforce access and quota.
 - **Control plane** — The MaaS controller reconciles model references and populates the data that policies and subscriptions depend on.
 
-For configuration details and how to create and use MaaSModelRef, see [MaaSModelRef Configuration](maas-model-ref-configuration.md) in the Administration Guide.
+For configuration details and how to create and use MaaSModelRef, see [Model Reference Overview](model-reference-overview.md) in the Administration Guide.

@@ -72,8 +72,8 @@ nav:
   - Administration Guide:
     - Configuration & Management:
       - Access Configuration Overview: configuration-and-management/access-configuration-overview.md
-      - MaaSModelRef Configuration: configuration-and-management/maas-model-ref-configuration.md
-      - MaaSSubscription Configuration: configuration-and-management/maas-subscription-configuration.md
+      - Quota Configuration Overview: configuration-and-management/quota-configuration-overview.md
+      - Model Reference Overview: configuration-and-management/model-reference-overview.md
       - MaaSAuthPolicy Configuration: configuration-and-management/maas-auth-policy-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md

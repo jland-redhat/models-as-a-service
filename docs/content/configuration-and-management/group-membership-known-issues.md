@@ -166,5 +166,5 @@ If a user has tokens from multiple subscriptions (before and after group change)
 
 ### Related Documentation
 
-- [MaaSSubscription Configuration](./maas-subscription-configuration.md) - How to configure subscription-to-group mappings
+- [Quota Configuration Overview](./quota-configuration-overview.md) - How to configure subscription-to-group mappings
 - [Token Management](./token-management.md) - Understanding token lifecycle and revocation

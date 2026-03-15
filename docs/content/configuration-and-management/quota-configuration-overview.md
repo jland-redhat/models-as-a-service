@@ -1,4 +1,4 @@
-# MaaSSubscription Configuration
+# Quota Configuration Overview
 
 This guide provides step-by-step instructions for configuring and managing subscriptions in the MaaS Platform. For more information on how MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription work together, see [MaaS Models](maas-models.md) and [Access and Quota Overview](subscription-overview.md).
 
@@ -213,7 +213,7 @@ kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n
 
 - [Access and Quota Overview](subscription-overview.md)
 - [MaaS Models](maas-models.md) — How MaaS identifies models on the cluster
-- [MaaSModelRef Configuration](maas-model-ref-configuration.md) — How to register models
+- [Model Reference Overview](model-reference-overview.md) — How to register models
 - [MaaSAuthPolicy Configuration](maas-auth-policy-configuration.md) — Access configuration
 - [Token Management](token-management.md)
 - [Validation](../install/validation.md)

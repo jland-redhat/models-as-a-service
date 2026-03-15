@@ -60,10 +60,10 @@ The team can use only the 5 models specified in the policy. Their usage is gover
 For configuration details, see:
 
 - [Access Configuration Overview](access-configuration-overview.md) — How to configure access (MaaSAuthPolicy)
-- [MaaSSubscription Configuration](maas-subscription-configuration.md) — How to configure subscriptions and rate limits
+- [Quota Configuration Overview](quota-configuration-overview.md) — How to configure subscriptions and rate limits
 - [MaaSAuthPolicy Configuration](maas-auth-policy-configuration.md) — Detailed MaaSAuthPolicy configuration
 - [MaaS Models](maas-models.md) — How MaaS identifies models on the cluster
-- [MaaSModelRef Configuration](maas-model-ref-configuration.md) — How to register models
+- [Model Reference Overview](model-reference-overview.md) — How to register models
 
 Additional references:
 
