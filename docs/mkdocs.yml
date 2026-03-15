@@ -77,6 +77,8 @@ nav:
       - MaaSAuthPolicy Configuration: configuration-and-management/maas-auth-policy-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
+    - Migration:
+      - Tier to Subscription: migration/tier-to-subscription.md
     - Model Setup: configuration-and-management/model-setup.md
     - Model Listing Flow: configuration-and-management/model-listing-flow.md
     - MaaSModelRef Kinds (future): configuration-and-management/maas-model-kinds.md
