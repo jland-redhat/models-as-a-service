@@ -1,0 +1,89 @@
+# Update Docs Latest Alias
+#
+# Updates the docs "latest" alias to point to an existing release tag.
+# The tag must already exist in the repository.
+#
+# Usage:
+#   1. Go to Actions > Update Docs Latest > Run workflow
+#   2. Enter the existing tag to promote to "latest" (e.g., v1.2.0)
+
+name: Update Docs Latest
+run-name: Update Docs Latest → ${{ inputs.tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to set as "latest" (e.g., v1.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GH_USER_NAME: github-actions[bot]
+  GH_USER_EMAIL: github-actions[bot]@users.noreply.github.com
+
+jobs:
+  update-latest:
+    name: Update Latest Alias
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate tag exists
+        run: |
+          TAG="${{ inputs.tag }}"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "❌ Error: Tag '$TAG' does not exist."
+            echo "This workflow requires an existing tag. Create a release first."
+            exit 1
+          fi
+          echo "✅ Tag '$TAG' found at $(git rev-parse "$TAG")"
+
+      - name: Checkout tag
+        run: git checkout ${{ inputs.tag }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('docs/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r docs/requirements.txt
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "${{ env.GH_USER_NAME }}"
+          git config --global user.email "${{ env.GH_USER_EMAIL }}"
+
+      - name: Update latest alias
+        run: |
+          cd docs
+          mike deploy --push --update-aliases ${{ inputs.tag }} latest
+          mike set-default --push latest
+
+      - name: Summary
+        run: |
+          {
+            echo "## Docs Latest Updated"
+            echo ""
+            echo "✅ **\`latest\`** alias now points to **\`${{ inputs.tag }}\`**"
+            echo ""
+            echo "- Docs URL: https://opendatahub-io.github.io/models-as-a-service/"
+          } >> "$GITHUB_STEP_SUMMARY"

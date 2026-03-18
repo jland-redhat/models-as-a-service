@@ -10,8 +10,9 @@
 # Usage:
 #   1. Go to Actions > Create Release > Run workflow
 #   2. Enter the tag (e.g., v1.0.0)
-#   3. Optionally enable "Allow overwriting existing tag" (only for pre-release iterations)
-#   4. Optionally enable "Create GitHub release"
+#   3. Optionally enable "Pre-release" to skip updating the docs 'latest' alias
+#   4. Optionally enable "Allow overwriting existing tag" (only for pre-release iterations)
+#   5. Optionally enable "Create GitHub release"
 #
 # The workflow will:
 #   - Extract minor version (e.g., v1.0.0 -> v1.x)
@@ -30,6 +31,11 @@ on:
         description: 'Release tag (e.g., v1.0.0)'
         required: true
         type: string
+      prerelease:
+        description: 'Pre-release (will not update the docs "latest" alias)'
+        required: false
+        type: boolean
+        default: false
       allow_tag_overwrite:
         description: 'Allow overwriting existing tag (use only for pre-release iterations)'
         required: false
@@ -241,7 +247,7 @@ jobs:
             
             > Note: Release notes can be edited after creation.
           draft: false
-          prerelease: ${{ contains(inputs.tag, '-') || contains(inputs.tag, 'alpha') || contains(inputs.tag, 'beta') || contains(inputs.tag, 'rc') }}
+          prerelease: ${{ inputs.prerelease || contains(inputs.tag, '-') || contains(inputs.tag, 'alpha') || contains(inputs.tag, 'beta') || contains(inputs.tag, 'rc') }}
 
   build-and-push-image:
     name: Build and Push Image
@@ -328,11 +334,13 @@ jobs:
       - name: Deploy versioned docs with mike
         run: |
           cd docs
-          # Deploy the new version and update latest
-          # Note: mike will automatically create the gh-pages branch if it doesn't exist
-          mike deploy --push --update-aliases ${{ needs.create-tag.outputs.version_tag }} latest
-          # Set latest as the default version
-          mike set-default --push latest
+          if [ "${{ inputs.prerelease }}" == "true" ]; then
+            echo "Pre-release: deploying docs version without updating 'latest' alias"
+            mike deploy --push ${{ needs.create-tag.outputs.version_tag }}
+          else
+            mike deploy --push --update-aliases ${{ needs.create-tag.outputs.version_tag }} latest
+            mike set-default --push latest
+          fi
 
   summary:
     name: Release Summary
@@ -363,6 +371,10 @@ jobs:
             echo ""
             echo "### Documentation"
             echo "- Docs Version: \`${{ needs.create-tag.outputs.version_tag }}\`"
-            echo "- Docs Alias: \`latest\`"
+            if [ "${{ inputs.prerelease }}" == "true" ]; then
+              echo "- Docs Alias: _(not updated — pre-release)_"
+            else
+              echo "- Docs Alias: \`latest\`"
+            fi
             echo "- Docs URL: https://opendatahub-io.github.io/models-as-a-service/"
           } >> "$GITHUB_STEP_SUMMARY"
