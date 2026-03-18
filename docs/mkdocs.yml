@@ -54,6 +54,8 @@ nav:
   - Home:
     - index.md
     - Release Notes: release-notes/index.md
+    - Migration:
+      - Tier to Subscription: migration/tier-to-subscription.md
   - Concepts:
     - Architecture: architecture.md
     - Access and Quota Overview: configuration-and-management/subscription-overview.md
@@ -65,7 +67,7 @@ nav:
       - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
-      - Model Setup: install/model-setup.md
+      - Model Setup (On Cluster): install/model-setup.md
       - Validation: install/validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
@@ -73,14 +75,9 @@ nav:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - Token Management: configuration-and-management/token-management.md
       - TLS Configuration: configuration-and-management/tls-configuration.md
-    - Migration:
-      - Tier to Subscription: migration/tier-to-subscription.md
-    - Model Setup: configuration-and-management/model-setup.md
-    - Model Listing Flow: configuration-and-management/model-listing-flow.md
-    - MaaSModelRef Kinds (future): configuration-and-management/maas-model-kinds.md
-    - Known Issues:
-      - Subscription: configuration-and-management/subscription-known-issues.md
-      - Model Access: configuration-and-management/model-access-behavior.md
+    - Models:
+      - Model Setup (On Cluster): configuration-and-management/model-setup.md
+      - Model Listing Flow: configuration-and-management/model-listing-flow.md
     - Advanced Administration:
       - Observability: advanced-administration/observability.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
@@ -88,6 +85,7 @@ nav:
   - User Guide:
     - Self Service Model Access: user-guide/self-service-model-access.md
   - API Reference:
+    - MaaS API Overview: reference/maas-api-overview.md
     - MaaS API (Swagger): reference/api-reference.md
     - MaaS CRDs:
       - MaaSModelRef: reference/crds/maas-model-ref.md

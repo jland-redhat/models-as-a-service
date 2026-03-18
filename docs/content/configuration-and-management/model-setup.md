@@ -1,19 +1,37 @@
-# Model Setup Guide
+# Model Setup (On Cluster) Guide
 
 This guide explains how to configure models so they appear in the MaaS platform and are subject to authentication, rate limiting, and token-based consumption tracking.
 
 !!! tip "Subscription model (recommended)"
     When using the **MaaS controller**, model access and rate limits are controlled by **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription** CRDs. See [Quota and Access Configuration](quota-and-access-configuration.md) and [Model Listing Flow](model-listing-flow.md).
 
+## Supported model types
+
+MaaS is planning support for multiple model types through a **provider paradigm**: each MaaSModelRef references a model backend by `kind` (e.g., `LLMInferenceService`, `ExternalModel`). The controller uses provider-specific logic to reconcile and resolve each type.
+
+**LLMInferenceService** will be initially supported. The initial release focuses on using KServe for on-cluster models. This guide describes the configuration differences between the default LLMInferenceService and the MaaS-enabled one to help users understand the differences.
+
 ## How the model list is built
 
-When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed, you register models by creating **MaaSModelRef** CRs that reference an LLMInferenceService. The controller reconciles each MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by **MaaSAuthPolicy** and **MaaSSubscription**. See [Model listing flow](model-listing-flow.md) for details.
+When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service/tree/main/maas-controller) is installed, you register models by creating **MaaSModelRef** CRs that reference a model backend (e.g., an LLMInferenceService). The controller reconciles each MaaSModelRef and sets `status.endpoint` and `status.phase`. The MaaS API lists these MaaSModelRef CRs and returns them as the model list. Access and quotas are controlled by **MaaSAuthPolicy** and **MaaSSubscription**. See [Model listing flow](model-listing-flow.md) for details.
 
-The sections below focus on **LLMInferenceService** configuration (gateway reference) for use as the backend referenced by MaaSModelRef.
+## MaaS-capable vs standard gateways
 
-## Gateway Architecture
+MaaS uses a **segregated gateway approach**. Models explicitly opt in to MaaS capabilities by routing through the **MaaS gateway** (`maas-default-gateway`). Models that use the **standard gateway** (ODH/KServe default) do not use MaaS policies.
 
-The MaaS platform uses a **segregated gateway approach**, where models explicitly opt-in to MaaS capabilities by referencing the `maas-default-gateway`. This provides flexibility and isolation between different model deployment scenarios.
+| | Standard gateway (ODH/KServe) | MaaS gateway (`maas-default-gateway`) |
+|--|-----------------------------|--------------------------------------|
+| **Authentication** | Existing ODH/KServe auth model | Token-based (API keys, OpenShift tokens) |
+| **Rate limits** | None | Subscription-based (Limitador) |
+| **Token consumption** | Not tracked | Tracked per usage |
+| **Access control** | Platform-level | Per-model (MaaSAuthPolicy, MaaSSubscription) |
+| **Use case** | Standard inference without MaaS policies | MaaS-managed access, quotas, and tracking |
+
+Models that use the standard gateway do not appear in the MaaS model list and are not subject to MaaS policies. To use MaaS features, configure your model to route through the MaaS gateway.
+
+## Gateway architecture (diagram)
+
+The diagram below shows how models can route through either gateway.
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'fontSize':'16px', 'fontFamily':'system-ui, -apple-system, sans-serif', 'edgeLabelBackground':'transparent', 'labelBackground':'transparent', 'tertiaryColor':'transparent'}}}%%
@@ -48,27 +66,27 @@ graph TB
 !!! note
     The `maas-default-gateway` is created automatically during MaaS platform installation. You don't need to create it manually.
 
-### Benefits
+### Benefits of the segregated approach
 
 - **Flexibility**: Different models can have different security and access requirements
-- **Progressive Adoption**: Teams can adopt MaaS features incrementally
-- **Production Control**: Production models get full policy enforcement if needed
-- **Multi-Tenancy**: Different teams can use different gateways in the same cluster
-- **Blast Radius Containment**: Issues with one gateway don't affect the other
+- **Progressive adoption**: Teams can adopt MaaS features incrementally
+- **Production control**: Production models get full policy enforcement when routed through the MaaS gateway
+- **Multi-tenancy**: Different teams can use different gateways in the same cluster
+- **Blast radius containment**: Issues with one gateway don't affect the other
 
 ## Prerequisites
 
-Before configuring a model for MaaS, ensure you have:
+Before configuring an LLMInferenceService for MaaS, ensure you have:
 
 - **MaaS platform installed** with `maas-default-gateway` deployed
 - **LLMInferenceService** resource created or planned
 - **Cluster admin** or equivalent permissions to modify `LLMInferenceService` resources
 
-## Configuring Models for MaaS
+## Configuring LLMInferenceService for MaaS
 
-To make your model available through the MaaS platform, **reference the maas-default-gateway** in your `LLMInferenceService` spec.
+To make your LLMInferenceService available through the MaaS platform, **reference the maas-default-gateway** in the `LLMInferenceService` spec. This routes traffic through the MaaS gateway so authentication, rate limiting, and consumption tracking apply.
 
-### Add Gateway Reference
+### Add gateway reference
 
 Configure your `LLMInferenceService` to use the `maas-default-gateway` by adding the gateway reference in the `router` section:
 
@@ -96,15 +114,15 @@ spec:
     # ... container configuration ...
 ```
 
-**Key Points:**
+**Key points:**
 
 - The `router.gateway.refs` field specifies which gateway to use
 - Use `name: maas-default-gateway` and `namespace: openshift-ingress`
-- **Without this specification**, the model uses the default KServe gateway and **is not subject to MaaS policies**
+- **Without this specification**, the LLMInferenceService uses the default KServe gateway and **is not subject to MaaS policies**
 
-### Complete Example
+### Complete example
 
-Here's a complete example of a MaaS-enabled model:
+Here's a complete example of an LLMInferenceService configured for MaaS:
 
 ```yaml
 apiVersion: serving.kserve.io/v1alpha1
@@ -136,9 +154,9 @@ spec:
             memory: 8Gi
 ```
 
-## Updating Existing Models
+## Updating existing models
 
-To convert an existing model to use MaaS:
+To convert an existing LLMInferenceService to use MaaS:
 
 ### Method 1: Patch the Model
 
@@ -166,7 +184,7 @@ Then add the gateway reference in `spec.router.gateway.refs`.
 
 ## Verification
 
-After configuring your model, verify it's accessible through MaaS:
+After configuring your LLMInferenceService, verify it's accessible through MaaS:
 
 **1. Check the model appears in the models list:**
 
