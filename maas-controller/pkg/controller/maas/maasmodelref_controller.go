@@ -82,6 +82,7 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get
 
 const maasModelFinalizer = "maas.opendatahub.io/model-cleanup"
 
@@ -136,6 +137,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
 		if errors.Is(err, ErrKindNotImplemented) {
 			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
+			return ctrl.Result{}, nil
+		}
+		if errors.Is(err, ErrHTTPRouteNotFound) {
+			// HTTPRoute doesn't exist yet - this is normal during startup.
+			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
+			model.Status.Endpoint = ""
+			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "failed to reconcile HTTPRoute")

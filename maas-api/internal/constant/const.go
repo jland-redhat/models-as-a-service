@@ -3,10 +3,11 @@ package constant
 import "time"
 
 const (
-	TierMappingConfigMap    = "tier-to-group-mapping"
-	DefaultNamespace        = "maas-api"
-	DefaultGatewayName      = "maas-default-gateway"
-	DefaultGatewayNamespace = "openshift-ingress"
+	TierMappingConfigMap             = "tier-to-group-mapping"
+	DefaultNamespace                 = "maas-api"
+	DefaultGatewayName               = "maas-default-gateway"
+	DefaultGatewayNamespace          = "openshift-ingress"
+	DefaultMaaSSubscriptionNamespace = "models-as-a-service"
 
 	DefaultResyncPeriod = 8 * time.Hour
 
@@ -19,7 +20,8 @@ const (
 	DefaultAPIKeyMaxExpirationDays = 90
 
 	// LLMInferenceService annotation keys for model metadata.
-	AnnotationGenAIUseCase = "opendatahub.io/genai-use-case"
-	AnnotationDescription  = "openshift.io/description"
-	AnnotationDisplayName  = "openshift.io/display-name"
+	AnnotationGenAIUseCase  = "opendatahub.io/genai-use-case"
+	AnnotationDescription   = "openshift.io/description"
+	AnnotationDisplayName   = "openshift.io/display-name"
+	AnnotationContextWindow = "opendatahub.io/context-window"
 )
