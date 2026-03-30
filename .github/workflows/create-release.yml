@@ -64,7 +64,8 @@ jobs:
       version_tag: ${{ steps.set_vars.outputs.version_tag }}
       minor_release_branch: ${{ steps.set_vars.outputs.minor_release_branch }}
       minor_version: ${{ steps.set_vars.outputs.minor_version }}
-    
+      is_prerelease: ${{ steps.prerelease.outputs.is_prerelease }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -101,6 +102,11 @@ jobs:
           echo "Minor version: $MINOR_VERSION"
           echo "Release branch: $MINOR_BRANCH"
 
+      - name: Set unified prerelease flag
+        id: prerelease
+        run: |
+          echo "is_prerelease=${{ inputs.prerelease || contains(inputs.tag, '-') || contains(inputs.tag, 'alpha') || contains(inputs.tag, 'beta') || contains(inputs.tag, 'rc') }}" >> "$GITHUB_OUTPUT"
+
       - name: Validate tag format
         run: |
           TAG="${{ inputs.tag }}"
@@ -116,6 +122,7 @@ jobs:
     outputs:
       version_tag: ${{ needs.prepare-release.outputs.version_tag }}
       minor_release_branch: ${{ needs.prepare-release.outputs.minor_release_branch }}
+      is_prerelease: ${{ needs.prepare-release.outputs.is_prerelease }}
     
     steps:
       - name: Checkout code
@@ -182,6 +189,7 @@ jobs:
     needs: create-release-branch
     outputs:
       version_tag: ${{ needs.create-release-branch.outputs.version_tag }}
+      is_prerelease: ${{ needs.create-release-branch.outputs.is_prerelease }}
     
     steps:
       - name: Checkout release branch
@@ -197,13 +205,15 @@ jobs:
           git config user.email "${{ env.GH_USER_EMAIL }}"
 
       - name: Create and push git tag
+        env:
+          ALLOW_TAG_OVERWRITE: ${{ inputs.allow_tag_overwrite }}
         run: |
           TAG="${{ needs.create-release-branch.outputs.version_tag }}"
           BRANCH="${{ needs.create-release-branch.outputs.minor_release_branch }}"
           
           # Check if tag already exists
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-            if [ "${{ inputs.allow_tag_overwrite }}" != "true" ]; then
+            if [ "$ALLOW_TAG_OVERWRITE" != "true" ]; then
               echo "❌ Error: Tag $TAG already exists!"
               echo ""
               echo "Tags should be immutable once released. To overwrite an existing tag:"
@@ -247,7 +257,7 @@ jobs:
             
             > Note: Release notes can be edited after creation.
           draft: false
-          prerelease: ${{ inputs.prerelease || contains(inputs.tag, '-') || contains(inputs.tag, 'alpha') || contains(inputs.tag, 'beta') || contains(inputs.tag, 'rc') }}
+          prerelease: ${{ needs.create-release-branch.outputs.is_prerelease == 'true' }}
 
   build-and-push-image:
     name: Build and Push Image
@@ -284,22 +294,26 @@ jobs:
         id: build_image
         env:
           QUAY_REPO: ${{ secrets.APP_QUAY_REPO }}
+          VERSION_TAG: ${{ needs.create-tag.outputs.version_tag }}
         run: |
           if [ -n "$QUAY_REPO" ]; then
             echo "Using custom repository from secret: $QUAY_REPO"
             echo "repo=$QUAY_REPO" >> $GITHUB_OUTPUT
-            make build-push-image REPO="$QUAY_REPO" TAG=${{ needs.create-tag.outputs.version_tag }} CONTAINER_ENGINE=docker
+            make build-push-image REPO="$QUAY_REPO" TAG="$VERSION_TAG" CONTAINER_ENGINE=docker
           else
             echo "Using Makefile default repository: quay.io/opendatahub/maas-api"
             echo "repo=quay.io/opendatahub/maas-api" >> $GITHUB_OUTPUT
-            make build-push-image TAG=${{ needs.create-tag.outputs.version_tag }} CONTAINER_ENGINE=docker
+            make build-push-image TAG="$VERSION_TAG" CONTAINER_ENGINE=docker
           fi
 
   deploy-documentation:
     name: Deploy Documentation
     runs-on: ubuntu-latest
     needs: create-tag
-    
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+
     steps:
       - name: Checkout version tag
         uses: actions/checkout@v6
@@ -332,13 +346,16 @@ jobs:
           git config --global user.email "${{ env.GH_USER_EMAIL }}"
 
       - name: Deploy versioned docs with mike
+        env:
+          PRERELEASE: ${{ needs.create-tag.outputs.is_prerelease }}
+          VERSION_TAG: ${{ needs.create-tag.outputs.version_tag }}
         run: |
           cd docs
-          if [ "${{ inputs.prerelease }}" == "true" ]; then
+          if [ "$PRERELEASE" = "true" ]; then
             echo "Pre-release: deploying docs version without updating 'latest' alias"
-            mike deploy --push ${{ needs.create-tag.outputs.version_tag }}
+            mike deploy --push "$VERSION_TAG"
           else
-            mike deploy --push --update-aliases ${{ needs.create-tag.outputs.version_tag }} latest
+            mike deploy --push --update-aliases "$VERSION_TAG" latest
             mike set-default --push latest
           fi
 
@@ -350,16 +367,22 @@ jobs:
     
     steps:
       - name: Summary
+        env:
+          VERSION_TAG: ${{ needs.create-tag.outputs.version_tag }}
+          MINOR_BRANCH: ${{ needs.create-release-branch.outputs.minor_release_branch }}
+          IMAGE_REPO: ${{ needs.build-and-push-image.outputs.image_repo }}
+          IS_PRERELEASE: ${{ needs.prepare-release.outputs.is_prerelease }}
+          CREATE_RELEASE: ${{ inputs.create_release }}
         run: |
           {
             echo "## Release Summary"
             echo ""
-            echo "✅ **Tag**: \`${{ needs.create-tag.outputs.version_tag }}\`"
-            echo "✅ **Release Branch**: \`${{ needs.create-release-branch.outputs.minor_release_branch }}\`"
+            echo "✅ **Tag**: \`$VERSION_TAG\`"
+            echo "✅ **Release Branch**: \`$MINOR_BRANCH\`"
             echo "✅ **Git Tag**: Created and pushed from release branch"
-            echo "✅ **Image Built & Pushed**: \`${{ needs.build-and-push-image.outputs.image_repo }}:${{ needs.create-tag.outputs.version_tag }}\`"
-            echo "✅ **Documentation Deployed**: \`${{ needs.create-tag.outputs.version_tag }}\`"
-            if [ "${{ inputs.create_release }}" == "true" ]; then
+            echo "✅ **Image Built & Pushed**: \`$IMAGE_REPO:$VERSION_TAG\`"
+            echo "✅ **Documentation Deployed**: \`$VERSION_TAG\`"
+            if [ "$CREATE_RELEASE" = "true" ]; then
               echo "✅ **GitHub Release**: Created"
             fi
             echo ""
@@ -367,11 +390,11 @@ jobs:
             echo "- \`deployment/base/maas-api/kustomization.yaml\`"
             echo "- \`maas-api/deploy/overlays/dev/kustomization.yaml\`"
             echo "- \`maas-api/deploy/overlays/odh/params.env\`"
-            echo "- MAAS_REF references updated to use \`${{ needs.create-tag.outputs.version_tag }}\`"
+            echo "- MAAS_REF references updated to use \`$VERSION_TAG\`"
             echo ""
             echo "### Documentation"
-            echo "- Docs Version: \`${{ needs.create-tag.outputs.version_tag }}\`"
-            if [ "${{ inputs.prerelease }}" == "true" ]; then
+            echo "- Docs Version: \`$VERSION_TAG\`"
+            if [ "$IS_PRERELEASE" = "true" ]; then
               echo "- Docs Alias: _(not updated — pre-release)_"
             else
               echo "- Docs Alias: \`latest\`"
