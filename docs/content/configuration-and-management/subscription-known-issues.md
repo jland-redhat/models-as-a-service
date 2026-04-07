@@ -43,5 +43,5 @@ API keys store the user's groups and bound subscription name at creation time. I
 ## Related Documentation
 
 - [Understanding Token Management](token-management.md)
-- [Access and Quota Overview](subscription-overview.md)
+- [Access and Quota Overview](../concepts/subscription-overview.md)
 - [Quota and Access Configuration](quota-and-access-configuration.md)

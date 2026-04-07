@@ -22,7 +22,7 @@ The MaaS Platform is a layer for **authorization and rate limiting** built on [K
 
 **Main Flows:**
 
-- **Key minting** (blue) — Obtain `sk-oai-*` API keys for programmatic access to models (after authenticating with your cluster identity or configured OIDC).
+- **Key minting** (blue) — Obtain `sk-oai-*` API keys for programmatic access to models (after authenticating with your cluster identity or configured OIDC). Each mint **binds a subscription** to the key; that association is stored with the key and used on inference.
 - **Inference** (green) — Call deployed models to generate completions using an API key (and subscription) on the inference route.
 
 
@@ -86,17 +86,18 @@ graph TB
 **Flow summary:**
 
 1. User sends `POST /maas-api/v1/api-keys` with `Authorization: Bearer {identity-token}`.
-2. **Gateway** routes the request to **AuthPolicy** and authenticates it against that policy.
-3. **Validate identity** — the policy stack checks the token using the configured method:
+    - The body sets which **MaaSSubscription** to bind (`subscription`), or omits it so the platform picks an accessible one (for example by priority).
+    - That subscription is **stored on the key** at mint; inference later reads it from the key record, not from per-request headers.
+2. **Validate identity** — **Authorino** (AuthPolicy) checks the token using the configured method:
     - **`kubernetesTokenReview`** — OpenShift cluster tokens
     - **OIDC JWT validation** — external IdP (for example Keycloak) — **Tech Preview**
-4. **AuthPolicy** (policy stack) forwards the authenticated request and **user context** to **MaaS API** (key minting)—the same identity headers used for authorization are passed through for minting.
-5. **MaaS API** receives that forwarded request and context from the policy layer.
-6. The service generates a random `sk-oai-*` key and hashes it with SHA-256.
-7. Only the hash and metadata (username, groups, name, optional `expiresAt` when TTL is set) are stored in PostgreSQL.
-8. The plaintext key is returned to the user **only in this minting response** (show-once), along with `expiresAt` when a TTL was specified; it is **not** exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.
+3. After authentication, the **request** is forwarded to **MaaS API** (key minting) on the gateway upstream path, with identity context available for minting—**Authorino** validates the request; it does not proxy or forward the HTTP call to MaaS API itself.
+4. **MaaS API** handles key minting using that authenticated identity and the requested subscription binding.
+5. The service generates a random `sk-oai-*` key and hashes it with SHA-256.
+6. Only the hash and metadata (username, groups, name, `subscription` — the MaaSSubscription name bound at mint, `expiresAt`) are stored in PostgreSQL.
+7. The plaintext key is returned to the user **only in this minting response** (show-once), along with `expiresAt`; it is **not** exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.
 
-Keys can be permanent (no expiration) or have an optional **TTL** (`expiresIn`, e.g., `30d`, `90d`, `1h`); the response includes `expiresAt` when a TTL is set.
+Every key expires. With **operator-managed** MaaS, the cluster operator sets the maximum lifetime on the **`ModelsAsService`** CR: **`spec.apiKeys.maxExpirationDays`** (see [ModelsAsService CR](../install/maas-setup.md#modelsasservice-cr)). **`maas-api`** applies that cap as **`API_KEY_MAX_EXPIRATION_DAYS`** (for example 90 days by default when defaults apply). Omit **`expiresIn`** on create to use that maximum, or set a shorter **`expiresIn`** (e.g., `30d`, `90d`, `1h`) within the configured cap. The response always includes **`expiresAt`** (RFC3339).
 
 ```mermaid
 graph TB
@@ -106,7 +107,7 @@ graph TB
 
     subgraph GatewayLayer["Gateway & Policy"]
         G[Gateway]
-        AP["AuthPolicy<sub>Authorino</sub>"]
+        AP["AuthPolicy<br/><sub>Authorino</sub>"]
     end
 
     subgraph KeyMinting["MaaS API"]
@@ -116,13 +117,12 @@ graph TB
     end
 
     subgraph Storage["Storage"]
-        DB[(PostgreSQL<br/>key hashes + metadata + TTL)]
+        DB[(PostgreSQL<br/>hashes + subscription + metadata + TTL)]
     end
 
     U -->|"POST /maas-api/v1/api-keys"| G
-    G -->|"Authenticate vs AuthPolicy"| AP
-    AP -->|"Validate identity"| G
-    AP -->|"Forward + user context"| API
+    G -->|"Validate identity"| AP
+    AP -->|"Request continues upstream"| API
     API --> Gen
     Gen --> Hash
     Hash -->|"Store hash + metadata"| DB
@@ -138,9 +138,6 @@ graph TB
 !!! Tip "OIDC Support"
     **Tech Preview:** OIDC JWT validation on the `maas-api` route is optional alongside OpenShift `kubernetesTokenReview`. Model routes still rely on API-key auth; the typical flow is authenticate at `maas-api`, mint an `sk-oai-*` key, then use that key for discovery and inference.
 
-!!! tip "Future Plans"
-    This is the **default implementation**. Future plans include integration with other key store providers (e.g., HashiCorp Vault, cloud secret managers).
-
 !!! note "PostgreSQL"
     A **PostgreSQL database is required** and is **not included** with the MaaS deployment. The deploy script provides a basic PostgreSQL deployment for development and testing—**this is not intended for production use**. For production, provision and configure your own PostgreSQL instance.
 
@@ -149,10 +146,12 @@ graph TB
 **Flow summary:**
 
 1. User sends inference request with an API key.
-2. Gateway routes to MaaSAuthPolicy (Authorino).
-3. MaaSAuthPolicy validates the key via MaaS API and selects subscription; on failure returns 401/403.
-4. MaaSSubscription (Limitador) checks token rate limits; on exceed returns 429.
-5. Request reaches Inference Service and LLM; completion returned to user.
+2. **Validate identity** — request reaches **MaaSAuthPolicy (Authorino)** via the Gateway.
+3. **MaaSAuthPolicy** validates the key via **MaaS API**; on failure returns 401/403.
+4. **Check limits** — **MaaSSubscription (Limitador)** enforces token rate limits; on exceed returns 429.
+5. Request reaches Inference Service when within limits.
+6. Inference Service forwards to the LLM.
+7. Completion Response is returned to the user.
 
 ```mermaid
 graph TB
@@ -176,9 +175,9 @@ graph TB
     end
     
     U -->|"1. Inference + API key"| G
-    G -->|"2. Route"| MAP
+    G -->|"2. Validate identity"| MAP
     MAP -.->|"3. Validate key"| API
-    MAP -->|"4. Auth OK"| MS
+    MAP -->|"4. Check limits"| MS
     MS -->|"5. Within limits"| INV
     INV -->|"6. Forward"| LLM
     LLM -->|"7. Completion"| U
@@ -199,43 +198,45 @@ graph TB
 
 ### Auth & Validation Flow (Deep Dive)
 
-The MaaSAuthPolicy delegates to the MaaS API for key validation and subscription selection. The subscription name comes from the PostgreSQL key record (set at key creation).
+For inference with an `sk-oai-*` API key, the policy layer performs **two MaaS API steps** in order. **First** the key is validated against PostgreSQL. **Subscription** is not read from request headers for API keys—it is **stored on the key record** when the key was minted and is returned as part of validation. **Second**, that subscription name, together with the username and groups from the key record, is used to confirm the caller may use that subscription for the target model (for example, that the subscription exists, the user still has access, and the model is part of that subscription).
 
 **Flow summary:**
 
-1. Authorino calls MaaS API to validate the API key.
-2. MaaS API validates the key (format, not revoked, not expired) and returns username, groups, and subscription.
-3. Authorino calls MaaS API to check subscription (groups, username, requested subscription from the key).
-4. If the user lacks access to the requested subscription → error (403).
-5. On success, returns selected subscription; Authorino caches the result (e.g., 60s TTL). Identity information (username, groups, subscription, key ID) is made available to TokenRateLimitPolicy and observability through AuthPolicy's `filters.identity` mechanism, but is **not forwarded** as HTTP headers to upstream model workloads (defense-in-depth security). Clients do not send subscription headers on inference; subscription comes from the API key record created at mint time.
+1. The **policy layer** sends the API key to the MaaS API **validate-key** path.
+2. **Validate key** — MaaS API parses the key, looks up the salted hash in PostgreSQL, and rejects unknown, revoked, expired, or malformed keys (and keys with no subscription bound). On success it returns identity (username, groups, key ID) and the **subscription name from the key record** (mint-time binding).
+3. **Subscription from the key** — The next step uses that subscription name as the requested subscription—**not** a client-supplied `X-MaaS-Subscription` value. For API keys the subscription in the request body to subscription selection is exactly the subscription returned from validation.
+4. **Confirm subscription access** — MaaS API subscription selection checks that the user and groups can use that subscription and that the requested model is allowed; failures surface as access denied (for example 403) to the policy layer.
+5. On success, identity and subscription context are available for rate limiting and metrics. That context is **not** forwarded as HTTP headers to upstream model workloads (defense in depth). Results may be cached briefly by the policy layer to avoid repeating work on every request.
 
 ```mermaid
 graph TB
-    subgraph AuthLayer["MaaSAuthPolicy (Authorino)"]
-        A[Authorino]
+    subgraph PolicyLayer["Policy layer"]
+        P[Policy]
     end
     
     subgraph MaaSLayer["MaaS API"]
-        Validate[Validate API Key]
-        SubSelect[Check Subscription]
+        V[Validate API key]
+        S[Confirm subscription access]
     end
     
     subgraph Storage["Storage"]
         DB[(PostgreSQL)]
     end
     
-    A -->|"1. Validate key"| Validate
-    Validate -->|"Lookup hash, check not expired"| DB
-    DB -->|"metadata"| Validate
+    P -->|"1. API key"| V
+    V -->|"2. Lookup key record"| DB
+    DB -->|"3. Subscription stored on key"| V
+    V -.->|"Invalid key"| P
+    P -->|"4. Groups, username, subscription from key"| S
+    S -.->|"Access denied"| P
+    S -->|"5. Authorized"| P
     
-    A -->|"2. Check subscription"| SubSelect
-    SubSelect -.->|"3. No access to requested sub → 403"| A
-    SubSelect -->|"4. Selected subscription"| A
+    linkStyle 3 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
+    linkStyle 5 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
     
-    linkStyle 4 stroke:#c62828,stroke-width:2px,stroke-dasharray:5,5
-    
-    style Validate fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style SubSelect fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style P fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
+    style V fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
+    style S fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style DB fill:#336791,stroke:#333,stroke-width:2px,color:#fff
 ```
 

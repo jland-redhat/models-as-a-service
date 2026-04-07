@@ -61,13 +61,13 @@ echo "Model URL: $MODEL_URL"
 
 ### 4. Test Model Inference Endpoint
 
-Send a request to the model endpoint (should get a 200 OK response):
+Send a request to the model endpoint (should get a 200 OK response). This uses the OpenAI **Responses** API shape (`input` + `max_output_tokens` on **`/v1/responses`**), not legacy completions (`prompt` on `/v1/completions`). Your inference backend must implement **`/v1/responses`**; simulators or gateways that only expose `/v1/chat/completions` or `/v1/completions` will return 404 until that route is supported.
 
 ```bash
 curl -sSk -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" | jq
+  -d "{\"model\": \"${MODEL_NAME}\", \"input\": \"Hello\", \"max_output_tokens\": 50}" \
+  "${MODEL_URL}/v1/responses" | jq
 ```
 
 ### 5. Test Authorization Enforcement
@@ -76,8 +76,8 @@ Send a request to the model endpoint without a token (should get a 401 Unauthori
 
 ```bash
 curl -sSk -H "Content-Type: application/json" \
-  -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/completions" -v
+  -d "{\"model\": \"${MODEL_NAME}\", \"input\": \"Hello\", \"max_output_tokens\": 50}" \
+  "${MODEL_URL}/v1/responses" -v
 ```
 
 ### 6. Test Rate Limiting
@@ -89,8 +89,8 @@ for i in {1..16}; do
   curl -sSk -o /dev/null -w "%{http_code}\n" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
-    -d "{\"model\": \"${MODEL_NAME}\", \"prompt\": \"Hello\", \"max_tokens\": 50}" \
-    "${MODEL_URL}/v1/completions"
+    -d "{\"model\": \"${MODEL_NAME}\", \"input\": \"Hello\", \"max_output_tokens\": 50}" \
+    "${MODEL_URL}/v1/responses"
 done
 ```
 

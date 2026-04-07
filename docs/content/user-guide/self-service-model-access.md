@@ -25,7 +25,7 @@ OC_TOKEN=$(oc whoami -t)
 
 ### Step 2: Create an API Key
 
-Use your OpenShift token to create an API key via the maas-api `/v1/api-keys` endpoint. You can create permanent keys (omit `expiresIn`) or expiring keys.
+Use your OpenShift token to create an API key via the maas-api `/v1/api-keys` endpoint. Keys always expire: omit `expiresIn` to use the operator-configured maximum lifetime, or set a shorter `expiresIn` within that cap.
 
 - Optional `subscription`: MaaSSubscription resource name to bind to this key. If you omit it, the platform picks your **highest-priority** accessible subscription (`spec.priority`).
 - The response includes `subscription`: the bound name (same flow whether you set it explicitly or not).
@@ -55,8 +55,7 @@ Replace `simulator-subscription` with your MaaSSubscription metadata name, or re
 
 ### API Key Lifecycle
 
-- **Permanent keys**: Omit `expiresIn` in the request body
-- **Expiring keys**: Set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`)
+- **Expiration**: Omit `expiresIn` to use the operator maximum (`API_KEY_MAX_EXPIRATION_DAYS`; see [Token Management](../configuration-and-management/token-management.md)), or set `expiresIn` (e.g., `"90d"`, `"1h"`, `"30d"`) up to that maximum
 - **Subscription**: Fixed at creation; mint a new key to change it
 - **Revocation**: Revoke via `DELETE /v1/api-keys/{id}` if compromised
 

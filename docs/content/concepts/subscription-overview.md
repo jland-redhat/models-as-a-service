@@ -61,7 +61,7 @@ The team can use only the 5 models specified in the policy. Their usage is gover
 
 For configuration details, see:
 
-- [Quota and Access Configuration](quota-and-access-configuration.md) — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
+- [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md) — Step-by-step configuration for MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription
 
 Additional references:
 
