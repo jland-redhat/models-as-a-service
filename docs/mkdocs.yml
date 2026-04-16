@@ -60,7 +60,7 @@ nav:
     - Architecture: concepts/architecture.md
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
-    - MaaS Models: concepts/maas-models.md
+    - Model Reference: concepts/model-reference.md
   - Install:
     - Quick Start: quickstart.md
     - Prerequisites:

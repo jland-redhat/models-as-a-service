@@ -1,6 +1,6 @@
 # Quota and Access Configuration
 
-This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](../concepts/subscription-overview.md) and [MaaS Models](../concepts/maas-models.md).
+This guide provides step-by-step instructions for configuring MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription. For conceptual overview, see [Access and Quota Overview](../concepts/subscription-overview.md) and [Model Reference](../concepts/model-reference.md).
 
 ## Prerequisites
 
@@ -258,6 +258,6 @@ kubectl wait --for=condition=Enforced=true tokenratelimitpolicy/<policy-name> -n
 ## Related Documentation
 
 - [Access and Quota Overview](../concepts/subscription-overview.md) — How policies and subscriptions work together
-- [MaaS Models](../concepts/maas-models.md) — Conceptual overview
+- [Model Reference](../concepts/model-reference.md) — Conceptual overview
 - [Token Management](token-management.md)
 - [Validation](../install/validation.md)

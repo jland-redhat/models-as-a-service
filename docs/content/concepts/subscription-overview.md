@@ -20,7 +20,7 @@ flowchart TD
     A -- "Pass" --> BothPass
     B -- "Pass" --> BothPass
 
-    BothPass{Access Granted} --> InferenceService["Inference Service"]
+    BothPass{Access Granted} --> InferenceService["Inference server<br/>(MaaSModelRef)"]
 
     style User fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
     style Gateway fill:#7b1fa2,stroke:#333,stroke-width:2px,color:#fff
