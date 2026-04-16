@@ -10,6 +10,7 @@ metadata:
 # substitutes them into Deployments, HTTPRoutes, and AuthPolicies.
 resources:
 - ../../../../deployment/base/maas-api/overlays/tls
+- ../../../../deployment/base/maas-controller/policies
 
 namespace: opendatahub
 

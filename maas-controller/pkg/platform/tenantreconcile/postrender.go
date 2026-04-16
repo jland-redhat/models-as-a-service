@@ -40,6 +40,8 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		}
 	}
 
+	setManagedFalseAnnotation(resources)
+
 	if err := configureExternalOIDC(log, tenant, resources); err != nil {
 		return nil, err
 	}
@@ -77,6 +79,24 @@ func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstr
 func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace string) {
 	log.V(4).Info("Configuring DestinationRule", "name", resource.GetName(), "newNamespace", gatewayNamespace)
 	resource.SetNamespace(gatewayNamespace)
+}
+
+// setManagedFalseAnnotation marks the maas-api AuthPolicy with opendatahub.io/managed=false
+// so the ODH operator does not reconcile it back to its defaults after the Tenant reconciler
+// has applied OIDC, audience, and other customizations.
+func setManagedFalseAnnotation(resources []unstructured.Unstructured) {
+	for i := range resources {
+		r := &resources[i]
+		if r.GroupVersionKind() == GVKAuthPolicy && r.GetName() == MaaSAPIAuthPolicyName {
+			ann := r.GetAnnotations()
+			if ann == nil {
+				ann = make(map[string]string)
+			}
+			ann["opendatahub.io/managed"] = "false"
+			r.SetAnnotations(ann)
+			return
+		}
+	}
 }
 
 func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {

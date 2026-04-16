@@ -866,7 +866,7 @@ cleanup_maas_controller_image() {
 #   Creates a backup that must be restored by calling cleanup_overlay_namespace.
 #
 # Arguments:
-#   overlay_dir - Path to overlay directory (e.g. deployment/overlays/tls-backend)
+#   overlay_dir - Path to overlay directory
 #   namespace   - Namespace to set (e.g. opendatahub)
 set_overlay_namespace() {
   local overlay_dir="${1?overlay_dir is required}"

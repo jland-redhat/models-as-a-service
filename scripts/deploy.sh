@@ -27,7 +27,7 @@
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
-#   MAAS_API_IMAGE            Custom MaaS API container image
+#   MAAS_API_IMAGE            Custom MaaS API image (passed to Tenant reconciler via RELATED_IMAGE)
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
@@ -506,11 +506,11 @@ main() {
       ;;
   esac
 
-  # Install subscription controller (always deployed)
-  # In kustomize mode, maas-controller is included in the overlay; in operator mode, install via script
-  # unless the operator has already created deployment/maas-controller (starting from 3.4).
+  # Install maas-controller (all deployment modes).
+  # The Tenant reconciler in maas-controller is the sole deployer of maas-api.
+  # In operator mode, skip if the ODH operator already created the deployment (3.4+).
   log_info ""
-  log_info "MaaS Subscription Controller..."
+  log_info "MaaS Controller..."
   local script_dir
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local project_root="$script_dir/.."
@@ -518,64 +518,97 @@ main() {
   local config_dir="$project_root/deployment/base/maas-controller/default"
 
   if [[ ! -d "$controller_dir" ]]; then
-    log_error "maas-controller directory not found at $controller_dir — subscription controller required"
+    log_error "maas-controller directory not found at $controller_dir — controller is required"
     return 1
+  fi
+
+  if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
+    log_error "Namespace $NAMESPACE does not exist."
+    return 1
+  fi
+
+  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+    log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
-    if [[ "$DEPLOYMENT_MODE" != "kustomize" ]]; then
-      if ! kubectl get namespace "$NAMESPACE" &>/dev/null; then
-        log_error "Namespace $NAMESPACE does not exist. Create it first (e.g. via ODH operator)."
-        return 1
-      fi
-      if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
-        log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
-      else
-        log_info "  Installing controller (CRDs, RBAC, deployment, default-deny policy)..."
-        set_maas_controller_image
-        if [[ "$NAMESPACE" != "opendatahub" ]]; then
-          (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
-            sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
-            cleanup_maas_controller_image
-            log_error "Failed to apply maas-controller manifests"
-            return 1
-          }
-        else
-          kubectl apply -k "$config_dir" || {
-            cleanup_maas_controller_image
-            log_error "Failed to apply maas-controller manifests"
-            return 1
-          }
-        fi
+    log_info "  Installing controller (CRDs, RBAC, deployment)..."
+    set_maas_controller_image
+    if [[ "$NAMESPACE" != "opendatahub" ]]; then
+      (cd "$project_root" && kustomize build deployment/base/maas-controller/default | \
+        sed "s/namespace: opendatahub/namespace: $NAMESPACE/g") | kubectl apply -f - || {
         cleanup_maas_controller_image
-      fi
+        log_error "Failed to apply maas-controller manifests"
+        return 1
+      }
     else
-      log_info "  Controller deployed via kustomize overlay (deployment/base/maas-controller/default)"
+      kubectl apply -k "$config_dir" || {
+        cleanup_maas_controller_image
+        log_error "Failed to apply maas-controller manifests"
+        return 1
+      }
     fi
+    cleanup_maas_controller_image
+  fi
 
-    log_info "  Waiting for maas-controller to be ready..."
+  log_info "  Waiting for maas-controller to be ready..."
+  if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    log_error "maas-controller deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+    return 1
+  fi
+  log_info "  Controller ready."
+
+  # Pass custom maas-api image to the Tenant reconciler via RELATED_IMAGE env var.
+  # The reconciler reads this when building params.env for kustomize (ApplyParams).
+  local env_patches=()
+  if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+    log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
+    env_patches+=("RELATED_IMAGE_ODH_MAAS_API_IMAGE=$MAAS_API_IMAGE")
+  fi
+
+  # Patch controller with correct audience for HyperShift/ROSA clusters.
+  local cluster_aud
+  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
+  if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
+    log_info "  Non-standard cluster audience detected: $cluster_aud"
+    env_patches+=("CLUSTER_AUDIENCE=$cluster_aud")
+  fi
+
+  if [[ ${#env_patches[@]} -gt 0 ]]; then
+    log_info "  Patching maas-controller env vars: ${env_patches[*]}"
+    kubectl set env deployment/maas-controller -n "$NAMESPACE" "${env_patches[@]}"
     if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-      log_error "maas-controller deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
-      return 1
-    fi
-
-    log_info "  Subscription controller ready."
-    log_info "  Create MaaSModelRef, MaaSAuthPolicy, and MaaSSubscription to enable per-model auth and rate limiting."
-
-    # Patch controller with correct audience for HyperShift/ROSA clusters.
-    # The controller creates AuthPolicies with kubernetesTokenReview.audiences;
-    # on non-standard clusters the default audience (https://kubernetes.default.svc)
-    # causes Authorino token validation to fail with 401.
-    local cluster_aud
-    cluster_aud=$(get_cluster_audience 2>/dev/null || echo "")
-    if [[ -n "$cluster_aud" && "$cluster_aud" != "https://kubernetes.default.svc" ]]; then
-      log_info "  Non-standard cluster audience detected: $cluster_aud"
-      log_info "  Patching maas-controller with correct CLUSTER_AUDIENCE..."
-      kubectl set env deployment/maas-controller -n "$NAMESPACE" CLUSTER_AUDIENCE="$cluster_aud"
-      if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-        log_warn "maas-controller rollout after audience patch did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
-      fi
+      log_warn "maas-controller rollout after env patch did not complete in time (timeout: ${ROLLOUT_TIMEOUT}s)"
     fi
   fi
 
+  # Wait for the Tenant reconciler to deploy maas-api.
+  # The controller creates a default-tenant CR on startup, and the Tenant
+  # reconciler renders and SSA-applies maas-api manifests + gateway policies.
+  log_info ""
+  log_info "Waiting for Tenant reconciler to deploy maas-api..."
+  local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
+  local elapsed=0
+  while [[ $elapsed -lt $maas_api_timeout ]]; do
+    if kubectl get deployment maas-api -n "$NAMESPACE" &>/dev/null; then
+      log_info "  maas-api deployment found, waiting for rollout..."
+      if kubectl rollout status deployment/maas-api -n "$NAMESPACE" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
+        log_info "  maas-api is ready"
+        break
+      fi
+    fi
+    sleep 10
+    elapsed=$((elapsed + 10))
+    if (( elapsed % 60 == 0 )); then
+      log_info "  Still waiting for maas-api deployment... (${elapsed}s / ${maas_api_timeout}s)"
+    fi
+  done
+
+  if ! kubectl get deployment maas-api -n "$NAMESPACE" &>/dev/null; then
+    log_error "maas-api deployment not created by Tenant reconciler after ${maas_api_timeout}s"
+    log_error "Check maas-controller logs: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
+    return 1
+  fi
+
+  log_info ""
   log_info "MaaS API and MaaS Controller deployment completed successfully!"
   local deployed_api_image deployed_ctrl_image
   deployed_api_image=$(kubectl get deployment/maas-api -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
@@ -621,17 +654,15 @@ deploy_via_operator() {
     deploy_keycloak
   fi
 
-  # Inject custom MaaS API image if specified
-  inject_maas_api_image_operator_mode "$NAMESPACE"
-
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
   fi
 
-
-  # Configure audience for non-standard clusters (Hypershift/ROSA)
-  configure_cluster_audience
+  # Custom maas-api image injection and cluster audience configuration
+  # are now handled by the Tenant reconciler in maas-controller (common
+  # block in main). The controller receives RELATED_IMAGE_ODH_MAAS_API_IMAGE
+  # and CLUSTER_AUDIENCE env vars and applies them during kustomize render.
 
   log_info "Operator deployment completed"
 }
@@ -643,33 +674,12 @@ deploy_via_operator() {
 deploy_via_kustomize() {
   log_info "Starting kustomize-based deployment..."
 
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_error "Could not find project root"
-    exit 1
-  }
-
   # Install rate limiter component (RHCL or Kuadrant)
   install_policy_engine
-
-  local overlay="$project_root/deployment/overlays/http-backend"
-  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    log_info "Using TLS backend overlay"
-    overlay="$project_root/deployment/overlays/tls-backend"
-  else
-    log_info "Using HTTP backend overlay"
-  fi
-
-  # Set namespace and image from script (overlay kustomization is restored on exit)
-  trap 'cleanup_maas_api_image; cleanup_maas_controller_image; cleanup_overlay_namespace' EXIT INT TERM
-  set_maas_api_image
-  set_maas_controller_image
-  set_overlay_namespace "$overlay" "$NAMESPACE"
 
   # Create namespace (idempotent - treat AlreadyExists as success to avoid TOCTOU races)
   log_info "Ensuring namespace exists: $NAMESPACE"
   if ! kubectl create namespace "$NAMESPACE" 2>/dev/null; then
-    # Create failed - check if it's because namespace already exists
     if kubectl get namespace "$NAMESPACE" &>/dev/null; then
       log_debug "Namespace $NAMESPACE already exists"
     else
@@ -680,11 +690,6 @@ deploy_via_kustomize() {
     log_info "Created namespace: $NAMESPACE"
   fi
 
-  # Note: The subscription namespace (default: models-as-a-service) is automatically
-  # created by maas-controller when it starts (see maas-controller/cmd/manager/main.go).
-  # We only set the variable here for use in manifest patching below.
-  local subscription_namespace="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
-
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
 
@@ -693,35 +698,17 @@ deploy_via_kustomize() {
     deploy_keycloak
   fi
 
-  log_info "Applying kustomize manifests..."
-  # Patch MAAS_SUBSCRIPTION_NAMESPACE env var with the configured subscription namespace
-  # tls/http overlays reference ../odh/params.env outside the overlay root.
-  kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(
-    kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | \
-    perl -pe 'BEGIN{undef $/;} s/(name: MAAS_SUBSCRIPTION_NAMESPACE\n\s+value: ")[^"]*"/${1}'"$subscription_namespace"'"/smg'
-  )
-
-  # Apply gateway policies separately so they stay in openshift-ingress (overlay
-  # namespace would otherwise overwrite them to $NAMESPACE)
-  local policies_dir="$project_root/deployment/base/maas-controller/policies"
-  if [[ -d "$policies_dir" ]]; then
-    log_info "Applying gateway policies (openshift-ingress)..."
-    kubectl apply --server-side=true --force-conflicts="$KUSTOMIZE_FORCE_CONFLICTS" -f <(kustomize build "$policies_dir")
-  fi
-
-  # Configure TLS backend (if enabled)
+  # Configure TLS backend (Authorino only — maas-api is deployed later by the Tenant reconciler)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
   fi
 
-  # Patch the live AuthPolicy after kustomize apply so OIDC and API key
-  # behavior matches operator mode when configured.
-  configure_maas_api_authpolicy
+  # maas-api, gateway policies, AuthPolicy configuration, and cluster audience
+  # are now handled by the Tenant reconciler in maas-controller. After the
+  # controller starts it creates the default-tenant CR, which triggers the
+  # reconciler to apply maas-api manifests and gateway policies via SSA.
 
-  # Configure audience for non-standard clusters (HyperShift/ROSA)
-  configure_cluster_audience
-
-  log_info "Kustomize deployment completed"
+  log_info "Kustomize prerequisite deployment completed"
 }
 
 #──────────────────────────────────────────────────────────────
