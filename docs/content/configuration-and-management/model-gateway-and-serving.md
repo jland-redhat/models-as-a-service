@@ -9,7 +9,7 @@ This page covers **on-cluster models**: point an **LLMInferenceService** at **`m
 - Access and quotas: [Quota and Access Configuration](quota-and-access-configuration.md)
 
 !!! tip "Subscription model"
-    Model access and rate limits use **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription**. See [Access and Quota Overview](subscription-overview.md).
+    Model access and rate limits use **MaaSModelRef**, **MaaSAuthPolicy**, and **MaaSSubscription**. See [Access and Quota Overview](../concepts/subscription-overview.md).
 
 ## Backends at a glance
 
@@ -19,7 +19,7 @@ On-cluster models typically use **LLMInferenceService** (for example vLLM via KS
 
 MaaS uses a **separate** Gateway API instance for policy enforcement. Only workloads attached to **`maas-default-gateway`** participate in MaaS listing (via **MaaSModelRef**), API keys, and subscription limits. The default KServe/ODH gateway path does not apply those policies.
 
-The diagram summarizes the split; for platform-wide context see [Architecture](../architecture.md).
+The diagram summarizes the split; for platform-wide context see [Architecture](../concepts/architecture.md).
 
 ```mermaid
 graph TB
