@@ -61,7 +61,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 	if err != nil {
 		return nil, fmt.Errorf("cluster audience: %w", err)
 	}
-	if err := CustomizeParams(manifestPath, tenant, appNs, audience); err != nil {
+	if err := CustomizeParams(ctx, c, manifestPath, tenant, appNs, audience); err != nil {
 		return nil, fmt.Errorf("customize params: %w", err)
 	}
 
@@ -73,6 +73,12 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 	resources, err := PostRender(ctx, log, tenant, rendered)
 	if err != nil {
 		return nil, fmt.Errorf("post-render: %w", err)
+	}
+
+	resources = StripGeneratedMaaSParametersConfigMap(resources)
+	resources, err = EnsureTenantRuntimeConfigMap(resources, tenant, appNs, audience)
+	if err != nil {
+		return nil, fmt.Errorf("tenant runtime configmap: %w", err)
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, resources); err != nil {

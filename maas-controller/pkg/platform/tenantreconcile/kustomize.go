@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/kustomize/api/krusty"
 	"sigs.k8s.io/kustomize/api/resmap"
+	"sigs.k8s.io/kustomize/api/types"
 	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
@@ -29,7 +30,9 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 		kustomizationPath = filepath.Join(manifestDir, "default")
 	}
 
-	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
+	opts := krusty.MakeDefaultOptions()
+	opts.LoadRestrictions = types.LoadRestrictionsNone
+	k := krusty.MakeKustomizer(opts)
 	fs := filesys.MakeFsOnDisk()
 	resMap, err := k.Run(fs, kustomizationPath)
 	if err != nil {

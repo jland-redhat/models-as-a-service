@@ -189,7 +189,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --external-oidc
       Enable external OIDC on the maas-api AuthPolicy.
-      Requires OIDC_ISSUER_URL or deployment/overlays/odh/params.env to provide
+      Requires OIDC_ISSUER_URL or deployment/base/maas-controller/default/params.env to provide
       a real oidc-issuer-url value.
 
 ENVIRONMENT VARIABLES:
@@ -566,7 +566,8 @@ main() {
   log_info "  Controller ready."
 
   # Pass custom maas-api image to the Tenant reconciler via RELATED_IMAGE env var.
-  # The reconciler reads this when building params.env for kustomize (ApplyParams).
+  # The reconciler merges this into params.env when the maas-api-image key is still empty
+  # after merging disk params.env and the live maas-parameters ConfigMap.
   local env_patches=()
   if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
     log_info "  Configuring custom MaaS API image: $MAAS_API_IMAGE"
@@ -1434,13 +1435,13 @@ patch_operator_csv() {
 #──────────────────────────────────────────────────────────────
 
 # get_odh_overlay_param
-#   Reads a value from deployment/overlays/odh/params.env.
+#   Reads a value from deployment/base/maas-controller/default/params.env.
 get_odh_overlay_param() {
   local key="$1"
   local project_root
   project_root="$(find_project_root)" || return 1
 
-  local params_file="$project_root/deployment/overlays/odh/params.env"
+  local params_file="$project_root/deployment/base/maas-controller/default/params.env"
   [[ -f "$params_file" ]] || return 1
 
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"

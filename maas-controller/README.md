@@ -13,12 +13,15 @@ For a comparison of the old tier-based flow vs the new subscription flow, see [d
 
 The Tenant reconciler watches `Tenant` CRs and deploys `maas-api` into the target namespace. On startup the controller creates a `default-tenant` CR if one does not exist. The reconciler:
 
-- Renders the embedded kustomize overlay (`maas-api/deploy/overlays/odh`) with runtime parameters (namespace, image, TLS settings)
+- Writes merged **`deployment/base/maas-controller/default/params.env`** (operator path) by merging, in order: the on-disk template, `RELATED_IMAGE_*` for any image keys still empty, the live **`maas-parameters`** `ConfigMap`, then Tenant-driven keys (same as before). Renders **`maas-api/deploy/overlays/odh`** (kustomize uses `LoadRestrictionsNone` to read that `params.env`). It **does not apply** the generated **`maas-parameters`** manifest (operator-owned); it patches **`maas-tenant-parameters`** for runtime gateway / `app-namespace` / audience / API key TTL so **maas-api** reads those from the tenant CM.
+- Renders the embedded kustomize overlay (`maas-api/deploy/overlays/odh`) with that merged `params.env` (namespace, image, TLS settings)
 - Applies the rendered manifests via SSA with `ForceOwnership`, so the controller is the sole owner
 - Deploys gateway default policies (`AuthPolicy` for deny-unauthenticated, `TokenRateLimitPolicy` for deny-unsubscribed)
 - Annotates the `maas-api` AuthPolicy with `opendatahub.io/managed=false` to prevent the ODH operator from reverting customizations
 
-The `RELATED_IMAGE_ODH_MAAS_API_IMAGE` environment variable controls which `maas-api` image the Tenant reconciler deploys. When set on the controller Deployment, it overrides the default image in the kustomize manifests.
+The `RELATED_IMAGE_*` environment variables on the controller Deployment still apply for image keys that are empty after merging disk `params.env` and the live `maas-parameters` `ConfigMap` (useful for custom images in dev or when the ConfigMap is not yet present).
+
+Follow-up cleanup is tracked in `docs/jira/MaaS-TenantReconcile-ReadOnlyKustomizeParams.jira` (avoid rewriting `params.env` under the repo tree) and `docs/jira/MaaS-TenantReconcile-E2E-MaasParametersMerge.jira` (E2E or envtest for CM merge order).
 
 #### Design decisions
 
@@ -468,7 +471,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ### CLI Flags
 
-The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` when using kustomize):
+The controller accepts the following command-line flags (configured via `deployment/base/maas-controller/default/params.env` when using kustomize):
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -497,7 +500,7 @@ Use this issuer URL as the `cluster-audience` value.
 
 **Configure via params.env (kustomize deployment):**
 
-Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
+Edit `deployment/base/maas-controller/default/params.env` and update the `cluster-audience` line:
 
 ```env
 cluster-audience=https://your-cluster-oidc-issuer

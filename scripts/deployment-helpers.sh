@@ -874,7 +874,7 @@ find_project_root() {
 #   Patches a key=value line in params.env. Creates a backup on first call.
 _patch_params_env() {
   local key="$1" value="$2" project_root="$3"
-  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/odh/params.env"
+  export _MAAS_PARAMS_ENV="$project_root/deployment/base/maas-controller/default/params.env"
   [ -f "$_MAAS_PARAMS_ENV" ] || return 0
   export _MAAS_PARAMS_ENV_BACKUP="${_MAAS_PARAMS_ENV}.backup"
   if [ ! -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then

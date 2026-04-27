@@ -6,11 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -51,8 +55,13 @@ func writeParamsToTmp(params map[string]string, tmpDir string) (string, error) {
 	defer tmp.Close()
 
 	writer := bufio.NewWriter(tmp)
-	for key, value := range params {
-		if _, err := fmt.Fprintf(writer, "%s=%s\n", key, value); err != nil {
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(writer, "%s=%s\n", key, params[key]); err != nil {
 			return "", err
 		}
 	}
@@ -63,55 +72,99 @@ func writeParamsToTmp(params map[string]string, tmpDir string) (string, error) {
 	return tmp.Name(), nil
 }
 
-func updateMap(m *map[string]string, key, val string) int {
-	old := (*m)[key]
-	if old == val {
-		return 0
+// loadMaaSParametersData returns a copy of ConfigMap data for maas-parameters in the application
+// namespace. If the ConfigMap does not exist, it returns nil, nil (Tenant reconcile falls back to
+// disk params.env plus RELATED_IMAGE_* on the controller process).
+func loadMaaSParametersData(ctx context.Context, c client.Client, namespace string) (map[string]string, error) {
+	if c == nil || namespace == "" {
+		return nil, nil
 	}
-	(*m)[key] = val
-	return 1
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: MaaSParametersConfigMapName}, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get ConfigMap %s/%s: %w", namespace, MaaSParametersConfigMapName, err)
+	}
+	out := make(map[string]string, len(cm.Data))
+	for k, v := range cm.Data {
+		out[k] = v
+	}
+	return out, nil
 }
 
-// ApplyParams mirrors opendatahub-operator/pkg/deploy.ApplyParams for params.env substitution.
-func ApplyParams(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) error {
+// relatedImageFill sets params keys from RELATED_IMAGE_* env vars when the current value is empty.
+func relatedImageFill(params map[string]string, imageParamsMap map[string]string) {
+	for paramKey, envName := range imageParamsMap {
+		if params[paramKey] != "" {
+			continue
+		}
+		if v := os.Getenv(envName); v != "" {
+			params[paramKey] = v
+		}
+	}
+}
+
+// mergeParamsForTenantReconcile merges layers for kustomize params.env:
+//  1. base file on disk (overlay template)
+//  2. RELATED_IMAGE_* for any image key still empty (dev / partial CM)
+//  3. live maas-parameters ConfigMap in the app namespace (ODH operator / DSC truth)
+//  4. tenant-specific keys (gateway, app-namespace, cluster-audience, API key TTL, …)
+//  5. RELATED_IMAGE_* again for keys still empty after CM (partial CM)
+func mergeParamsForTenantReconcile(base map[string]string, imageParamsMap map[string]string, cmData map[string]string, tenantParams map[string]string) {
+	relatedImageFill(base, imageParamsMap)
+	if cmData != nil {
+		for k, v := range cmData {
+			base[k] = v
+		}
+	}
+	for k, v := range tenantParams {
+		base[k] = v
+	}
+	relatedImageFill(base, imageParamsMap)
+}
+
+// mergeAndWriteParamsEnv writes the merged params map to componentPath/file. When client and
+// cmNamespace are set, the live maas-parameters ConfigMap is merged in (see mergeParamsForTenantReconcile).
+func mergeAndWriteParamsEnv(ctx context.Context, c client.Client, componentPath, file string, imageParamsMap map[string]string, cmNamespace string, tenantParams map[string]string) error {
 	paramsFile := filepath.Join(componentPath, file)
 
-	paramsEnvMap, err := parseParams(paramsFile)
+	base, err := parseParams(paramsFile)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		if !os.IsNotExist(err) {
+			return err
 		}
-		return err
+		base = make(map[string]string)
 	}
 
-	updated := 0
-	for i := range paramsEnvMap {
-		relatedImageValue := os.Getenv(imageParamsMap[i])
-		if relatedImageValue != "" {
-			updated |= updateMap(&paramsEnvMap, i, relatedImageValue)
-		}
-	}
-	for _, extraParamsMap := range extraParamsMaps {
-		for eKey, eValue := range extraParamsMap {
-			updated |= updateMap(&paramsEnvMap, eKey, eValue)
-		}
-	}
-
-	if updated == 0 {
-		return nil
-	}
-
-	tmp, err := writeParamsToTmp(paramsEnvMap, componentPath)
+	cmData, err := loadMaaSParametersData(ctx, c, cmNamespace)
 	if err != nil {
 		return err
 	}
 
+	mergeParamsForTenantReconcile(base, imageParamsMap, cmData, tenantParams)
+
+	tmp, err := writeParamsToTmp(base, componentPath)
+	if err != nil {
+		return err
+	}
 	if err = os.Rename(tmp, paramsFile); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("failed rename %s to %s: %w", tmp, paramsFile, err)
 	}
-
 	return nil
+}
+
+// ApplyParams mirrors opendatahub-operator/pkg/deploy.ApplyParams for params.env substitution.
+// It does not read the live maas-parameters ConfigMap; Tenant reconcile uses mergeAndWriteParamsEnv instead.
+func ApplyParams(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) error {
+	tenant := make(map[string]string)
+	for _, extraParamsMap := range extraParamsMaps {
+		for k, v := range extraParamsMap {
+			tenant[k] = v
+		}
+	}
+	return mergeAndWriteParamsEnv(context.Background(), nil, componentPath, file, imageParamsMap, "", tenant)
 }
 
 // ApplyRendered server-side-applies rendered objects with Tenant as controller owner (ODH deploy parity).
@@ -160,4 +213,9 @@ func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha
 	labels[LabelTenantName] = tenant.Name
 	labels[LabelTenantNamespace] = tenant.Namespace
 	obj.SetLabels(labels)
+}
+
+func isOptionalAPIGroup(group string) bool {
+	_, ok := OptionalAPIGroups[group]
+	return ok
 }

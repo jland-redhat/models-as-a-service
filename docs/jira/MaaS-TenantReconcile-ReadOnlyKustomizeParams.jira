@@ -1,0 +1,28 @@
+## Summary
+
+Tenant reconcile should build kustomize without rewriting overlay params.env under MAAS_PLATFORM_MANIFESTS
+
+## Story
+
+- **As a** platform maintainer,
+- **I want** the Tenant reconciler to render manifests from a read-only or shared manifest directory without atomically replacing `params.env` in that tree,
+- **So that** concurrent reconciles, git-dirty dev trees, and read-only volume mounts cannot break or confuse kustomize inputs.
+
+## Description
+
+Today `mergeAndWriteParamsEnv` writes the merged map to `filepath.Join(manifestDir, "params.env")` because kustomize `configMapGenerator` `envs` must reference a file next to `kustomization.yaml`. Follow-up options include a temporary copy of the overlay with merged `params.env`, or kustomize API usage with relaxed load restrictions, documented and chosen with performance and packaging constraints in mind.
+
+## Acceptance criteria
+
+- **Given** a Tenant reconcile run with `MAAS_PLATFORM_MANIFESTS` pointing at a directory that must not be mutated (e.g. read-only mount),
+ **When** the reconciler merges `maas-parameters`, Tenant fields, and `RELATED_IMAGE_*` fallbacks,
+ **Then** kustomize build succeeds without writing `params.env` into that source tree (merged content may live under `TMPDIR` or an emptyDir scratch path).
+
+## Documentation
+
+- Update `maas-controller/README.md` Tenant reconciler section to describe the final layout (scratch vs in-tree `params.env`).
+- Note any operator contract impact if paths change (none expected if overlay path stays the same).
+
+## Testability
+
+- Add an integration or envtest case where manifest root is read-only and reconcile still produces the same rendered hash as today for a fixed CM + Tenant input.

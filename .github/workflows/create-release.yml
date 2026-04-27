@@ -173,7 +173,7 @@ jobs:
         run: |
           git add deployment/base/maas-api/kustomization.yaml
           git add maas-api/deploy/overlays/dev/kustomization.yaml || true
-          git add maas-api/deploy/overlays/odh/params.env || true
+          git add deployment/base/maas-controller/default/params.env || true
           git add docs/ scripts/ || true
           
           if ! git diff --staged --quiet; then
@@ -249,7 +249,7 @@ jobs:
             ### Updated Files
             - `deployment/base/maas-api/kustomization.yaml`
             - `maas-api/deploy/overlays/dev/kustomization.yaml`
-            - `maas-api/deploy/overlays/odh/params.env`
+            - `deployment/base/maas-controller/default/params.env`
             - MAAS_REF references updated to use `${{ needs.create-release-branch.outputs.version_tag }}` instead of `main`
             
             ### Release Branch
@@ -389,7 +389,7 @@ jobs:
             echo "### Updated Files"
             echo "- \`deployment/base/maas-api/kustomization.yaml\`"
             echo "- \`maas-api/deploy/overlays/dev/kustomization.yaml\`"
-            echo "- \`maas-api/deploy/overlays/odh/params.env\`"
+            echo "- \`deployment/base/maas-controller/default/params.env\`"
             echo "- MAAS_REF references updated to use \`$VERSION_TAG\`"
             echo ""
             echo "### Documentation"

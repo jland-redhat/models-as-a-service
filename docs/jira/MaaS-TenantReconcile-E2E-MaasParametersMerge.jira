@@ -1,0 +1,27 @@
+## Summary
+
+Add E2E coverage for Tenant reconcile params merge using live maas-parameters ConfigMap
+
+## Story
+
+- **As a** MaaS engineer,
+- **I want** an automated test that applies a `maas-parameters` ConfigMap and exercises Tenant platform reconcile,
+- **So that** regressions in merge order (disk, RELATED_IMAGE fallback, CM, Tenant overrides) are caught before release.
+
+## Description
+
+Unit tests in `maas-controller/pkg/platform/tenantreconcile/params_merge_test.go` cover merge logic with a fake client. An E2E or envtest flow should install or create `maas-parameters` in the app namespace with representative keys (at least one image digest and one non-tenant key), run reconcile, and assert rendered `Deployment` image or ConfigMap-derived behavior matches expectations. Defer or scope explicitly if full cluster E2E is too heavy; envtest with real kustomize build is acceptable.
+
+## Acceptance criteria
+
+- **Given** a cluster or envtest environment with the MaaS overlay on disk and a `maas-parameters` ConfigMap in the application namespace whose `data` disagrees with disk `params.env` for at least one image key,
+ **When** Tenant reconcile runs `CustomizeParams` and `RenderKustomize`,
+ **Then** the rendered workload uses the ConfigMap value for that key and Tenant-supplied values for gateway / `app-namespace` / `cluster-audience` overrides.
+
+## Documentation
+
+- Reference the test in `maas-controller/README.md` or the repo E2E README if one exists; otherwise a one-line pointer in the test file header is enough.
+
+## Testability
+
+- The new test fails on merge-order bugs (CM overwritten by stale disk, or Tenant not winning over CM for gateway keys).

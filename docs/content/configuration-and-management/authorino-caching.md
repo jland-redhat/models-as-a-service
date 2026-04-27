@@ -36,7 +36,7 @@ The maas-controller deployment supports the following environment variables:
 
 #### Via params.env (ODH Overlay)
 
-Edit `deployment/overlays/odh/params.env`:
+Edit `deployment/base/maas-controller/default/params.env`:
 
 ```env
 metadata-cache-ttl=300  # 5 minutes

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -14,6 +13,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -405,19 +405,14 @@ func hashConfigMapData(data map[string]string) string {
 	return hex.EncodeToString(hash[:])
 }
 
-// CustomizeParams writes gateway/app-namespace/cluster-audience and optional API key days into overlay params.env
-// (same keys as ODH customizeManifests; images use RELATED_IMAGE_* like ODH Init + ApplyParams).
-func CustomizeParams(manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) error {
-	params := map[string]string{
-		"gateway-namespace": tenant.Spec.GatewayRef.Namespace,
-		"gateway-name":      tenant.Spec.GatewayRef.Name,
-		"app-namespace":     appNamespace,
+// CustomizeParams merges deployment/base/maas-controller/default/params.env with the live
+// maas-parameters ConfigMap (when present), RELATED_IMAGE_* for empty image keys, and Tenant-driven
+// keys, then writes the result back to that path (operator + kustomize generator entrypoint).
+func CustomizeParams(ctx context.Context, c client.Client, manifestDir string, tenant *maasv1alpha1.Tenant, appNamespace string, clusterAudience string) error {
+	paramsDir, err := ParamsEnvDirForManifest(manifestDir)
+	if err != nil {
+		return err
 	}
-	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		params["api-key-max-expiration-days"] = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
-	}
-	if clusterAudience != "" {
-		params["cluster-audience"] = clusterAudience
-	}
-	return ApplyParams(manifestDir, "params.env", ImageParamKeys, params)
+	params := TenantRuntimeParametersMap(tenant, appNamespace, clusterAudience)
+	return mergeAndWriteParamsEnv(ctx, c, paramsDir, "params.env", ImageParamKeys, appNamespace, params)
 }

@@ -1,0 +1,14 @@
+# Defaults for maas-api runtime env (GATEWAY_*, audience, API key TTL). Tenant reconcile patches
+# this ConfigMap in the rendered set before apply so values stay aligned with params.env.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-tenant-parameters
+  labels:
+    app.kubernetes.io/part-of: models-as-a-service
+data:
+  gateway-namespace: openshift-ingress
+  gateway-name: maas-default-gateway
+  app-namespace: opendatahub
+  cluster-audience: https://kubernetes.default.svc
+  api-key-max-expiration-days: "90"

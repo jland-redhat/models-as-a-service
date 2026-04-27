@@ -2,23 +2,7 @@
 // (initialize → dependencies → prerequisites → gateway → params → kustomize → post-render → apply → deployment status).
 package tenantreconcile
 
-import (
-	"k8s.io/apimachinery/pkg/runtime/schema"
-)
-
-// OptionalAPIGroups lists API groups whose CRDs are installed by optional platform
-// components (e.g. COO for Perses). Resources in these groups are skipped gracefully
-// when their CRDs are not yet registered, instead of failing the Tenant reconcile.
-// The CRD watch in the controller re-triggers reconcile once the CRDs appear.
-var OptionalAPIGroups = map[string]bool{
-	"perses.dev": true, // Cluster Observability Operator (COO) — Perses dashboards and datasources
-}
-
-// isOptionalAPIGroup returns true when missing CRDs for the given group should not
-// fail the reconcile (i.e. the dependency is installed by an optional operator).
-func isOptionalAPIGroup(group string) bool {
-	return OptionalAPIGroups[group]
-}
+import "k8s.io/apimachinery/pkg/runtime/schema"
 
 const (
 	// ComponentName matches the ODH modelsasservice component label key suffix (app.opendatahub.io/<name>).
@@ -39,6 +23,9 @@ const (
 	TelemetryPolicyName                        = "maas-telemetry"
 	IstioTelemetryName                         = "latency-per-subscription"
 	MaaSParametersConfigMapName                = "maas-parameters"
+	// MaaSTenantRuntimeParametersConfigMapName holds gateway/app-namespace/audience and optional API key TTL
+	// for maas-api (see shared-patches). Operator ships defaults; Tenant reconcile patches before apply.
+	MaaSTenantRuntimeParametersConfigMapName = "maas-tenant-parameters"
 	MaaSAPIDeploymentName                      = "maas-api"
 	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey                            = "DB_CONNECTION_URL"
@@ -54,12 +41,22 @@ const (
 	ReadyConditionType                  = "Ready"
 )
 
-// ImageParamKeys maps params.env keys to RELATED_IMAGE_* env vars (same as ODH modelsasservice_support.go).
+// ImageParamKeys maps params.env keys to RELATED_IMAGE_* env vars on the controller/operator process
+// (same as ODH modelsasservice_support.go imagesMap). Tenant reconcile merges live maas-parameters
+// ConfigMap data first, then fills any still-empty image keys from these env vars (dev / partial CM):
+// RELATED_IMAGE_ODH_MAAS_API_IMAGE, RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE,
+// RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE, RELATED_IMAGE_UBI_MINIMAL_IMAGE.
 var ImageParamKeys = map[string]string{
 	"maas-api-image":             "RELATED_IMAGE_ODH_MAAS_API_IMAGE",
 	"maas-controller-image":      "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE",
 	"payload-processing-image":   "RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE",
 	"maas-api-key-cleanup-image": "RELATED_IMAGE_UBI_MINIMAL_IMAGE",
+}
+
+// OptionalAPIGroups lists API groups whose CRDs may be installed after MaaS; Tenant reconcile watches
+// these CRDs and skips apply NoMatch for matching groups (see ApplyRendered and tenant_controller predicates).
+var OptionalAPIGroups = map[string]struct{}{
+	"perses.dev": {},
 }
 
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections for modelsasservice).
