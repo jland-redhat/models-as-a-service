@@ -23,9 +23,6 @@ const (
 	TelemetryPolicyName                        = "maas-telemetry"
 	IstioTelemetryName                         = "latency-per-subscription"
 	MaaSParametersConfigMapName                = "maas-parameters"
-	// MaaSTenantRuntimeParametersConfigMapName holds gateway/app-namespace/audience and optional API key TTL
-	// for maas-api (see shared-patches). Operator ships defaults; Tenant reconcile patches before apply.
-	MaaSTenantRuntimeParametersConfigMapName = "maas-tenant-parameters"
 	MaaSAPIDeploymentName                      = "maas-api"
 	MaaSDBSecretName                           = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey                            = "DB_CONNECTION_URL"

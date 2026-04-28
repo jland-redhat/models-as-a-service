@@ -42,45 +42,6 @@ resources:
 components:
   - ../../components/shared-patches
 
-# ODH-SPECIFIC PATCHES
-# Additional cache TTL configuration for maas-controller
-patches:
-- patch: |-
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: maas-controller
-    spec:
-      template:
-        spec:
-          containers:
-          - name: manager
-            args:
-            - --leader-elect
-            - --health-probe-bind-address=:8081
-            - --gateway-name=$(GATEWAY_NAME)
-            - --gateway-namespace=$(GATEWAY_NAMESPACE)
-            - --maas-api-namespace=$(MAAS_API_NAMESPACE)
-            - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
-            - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
-            - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
-            env:
-            - name: METADATA_CACHE_TTL
-              valueFrom:
-                configMapKeyRef:
-                  key: metadata-cache-ttl
-                  name: maas-parameters
-                  optional: false
-            - name: AUTHZ_CACHE_TTL
-              valueFrom:
-                configMapKeyRef:
-                  key: authz-cache-ttl
-                  name: maas-parameters
-                  optional: false
-  target:
-    kind: Deployment
-    name: maas-controller
-
 # ODH-SPECIFIC REPLACEMENTS
 # These are in addition to shared-patches and handle ODH-specific resources
 # (gateway policies and DestinationRule)

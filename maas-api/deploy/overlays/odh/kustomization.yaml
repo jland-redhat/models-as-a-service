@@ -8,7 +8,6 @@ metadata:
 # platform workloads. params.env lives under deployment/base/maas-controller/default (operator path).
 # For `kustomize build` from the CLI use: --load-restrictor LoadRestrictionsNone
 resources:
-- maas-tenant-parameters.yaml
 - ../../../../deployment/base/maas-api/overlays/tls
 - ../../../../deployment/base/maas-controller/policies
 - ../../../../deployment/base/payload-processing/default

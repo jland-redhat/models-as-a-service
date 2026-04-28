@@ -12,7 +12,6 @@ generatorOptions:
   disableNameSuffixHash: true
 
 resources:
-  - maas-tenant-parameters.yaml
   - ../crd
   - ../rbac
   - ../manager

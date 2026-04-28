@@ -32,13 +32,33 @@ spec:
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
-          - --metadata-cache-ttl=60
-          - --authz-cache-ttl=60
+          - --metadata-cache-ttl=$(METADATA_CACHE_TTL)
+          - --authz-cache-ttl=$(AUTHZ_CACHE_TTL)
         env:
           - name: GATEWAY_NAME
-            value: "maas-default-gateway"
+            valueFrom:
+              configMapKeyRef:
+                name: maas-parameters
+                key: gateway-name
+                optional: false
           - name: GATEWAY_NAMESPACE
-            value: "openshift-ingress"
+            valueFrom:
+              configMapKeyRef:
+                name: maas-parameters
+                key: gateway-namespace
+                optional: false
+          - name: METADATA_CACHE_TTL
+            valueFrom:
+              configMapKeyRef:
+                name: maas-parameters
+                key: metadata-cache-ttl
+                optional: false
+          - name: AUTHZ_CACHE_TTL
+            valueFrom:
+              configMapKeyRef:
+                name: maas-parameters
+                key: authz-cache-ttl
+                optional: false
           - name: MAAS_API_NAMESPACE
             valueFrom:
               fieldRef:

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -19,7 +20,7 @@ import (
 )
 
 // PostRender mutates rendered resources the same way as ODH modelsasservice post-kustomize actions.
-func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
+func PostRender(ctx context.Context, log logr.Logger, c client.Client, appNamespace string, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
 
@@ -64,10 +65,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources); err != nil {
 		return nil, err
 	}
+	if err := injectWorkloadImagesFromLiveMaaSParameters(ctx, log, c, appNamespace, filteredResources); err != nil {
+		return nil, err
+	}
 	if err := configureConfigHashAnnotation(log, filteredResources); err != nil {
 		return nil, err
 	}
-	_ = ctx
 	return filteredResources, nil
 }
 
@@ -413,6 +416,16 @@ func CustomizeParams(ctx context.Context, c client.Client, manifestDir string, t
 	if err != nil {
 		return err
 	}
-	params := TenantRuntimeParametersMap(tenant, appNamespace, clusterAudience)
+	params := map[string]string{
+		"gateway-namespace": tenant.Spec.GatewayRef.Namespace,
+		"gateway-name":      tenant.Spec.GatewayRef.Name,
+		"app-namespace":     appNamespace,
+	}
+	if clusterAudience != "" {
+		params["cluster-audience"] = clusterAudience
+	}
+	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
+		params["api-key-max-expiration-days"] = strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+	}
 	return mergeAndWriteParamsEnv(ctx, c, paramsDir, "params.env", ImageParamKeys, appNamespace, params)
 }
