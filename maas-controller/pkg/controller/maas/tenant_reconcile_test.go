@@ -83,6 +83,7 @@ func TestTenantReconcile_DeletionStripsLegacyFinalizer(t *testing.T) {
 	var updated maasv1alpha1.Tenant
 	err = cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)
 	if apierrors.IsNotFound(err) {
+		// Fake client may drop the object once the last finalizer is removed.
 		return
 	}
 	g.Expect(err).NotTo(HaveOccurred())

@@ -72,9 +72,30 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Handle delete before Removed/Unmanaged idle. Legacy installs may still carry the old finalizer;
-	// strip it so the Tenant object can complete deletion (platform teardown is via Config GC).
+	// Handle delete before Removed/Unmanaged idle. Legacy installs may still carry the old finalizer.
+	// When Config exists, delete it first (platform GC); otherwise only strip the legacy finalizer.
 	if !tenant.DeletionTimestamp.IsZero() {
+		var cfg maasv1alpha1.Config
+		switch err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); {
+		case err == nil:
+			requeue, err2 := r.ensureConfigDeletedForRemoval(ctx)
+			if err2 != nil {
+				return ctrl.Result{}, err2
+			}
+			if requeue != nil {
+				return *requeue, nil
+			}
+		case apierrors.IsNotFound(err):
+			// No anchor: proceed to finalizer strip only.
+		default:
+			return ctrl.Result{}, err
+		}
+		if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
+			if apierrors.IsNotFound(err) {
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant)
 	}
 
@@ -239,6 +260,10 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 		return nil, &res, nil
 	}
 	if ct.UID == "" {
+		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForConfigUID",
+			fmt.Sprintf("Config %q has no UID yet; waiting before platform apply", maasv1alpha1.ConfigInstanceName)); err != nil {
+			return nil, nil, err
+		}
 		res := ctrl.Result{RequeueAfter: 5 * time.Second}
 		return nil, &res, nil
 	}

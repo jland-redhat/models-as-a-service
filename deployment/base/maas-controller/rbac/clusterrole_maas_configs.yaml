@@ -9,12 +9,14 @@ metadata:
     app.kubernetes.io/part-of: modelsasservice
     app.opendatahub.io/modelsasservice: "true"
 rules:
+  # Singleton Config/default only (create cannot be restricted by resourceNames in RBAC).
   - apiGroups:
       - maas.opendatahub.io
     resources:
       - configs
+    resourceNames:
+      - default
     verbs:
-      - create
       - delete
       - get
       - list
@@ -24,7 +26,15 @@ rules:
   - apiGroups:
       - maas.opendatahub.io
     resources:
+      - configs
+    verbs:
+      - create
+  - apiGroups:
+      - maas.opendatahub.io
+    resources:
       - configs/status
+    resourceNames:
+      - default
     verbs:
       - get
       - patch
@@ -33,5 +43,7 @@ rules:
       - maas.opendatahub.io
     resources:
       - configs/finalizers
+    resourceNames:
+      - default
     verbs:
       - update

@@ -163,8 +163,22 @@ force_delete_namespace() {
     kubectl wait --for=delete namespace/"$ns" --timeout=30s 2>/dev/null || true
 }
 
+# Clear finalizers on cluster-scoped anchor CRs so delete is not stuck after operator removal.
+patch_clear_cluster_anchor_finalizers() {
+    local resource=$1
+    local name=$2
+    if kubectl get "$resource" "$name" &>/dev/null; then
+        kubectl patch "$resource" "$name" --type=json \
+            -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    fi
+}
+
 # 8c. Delete cluster-scoped MaaS anchor CRs (Config; legacy ClusterTenant before rename)
 echo "8c. Deleting MaaS cluster-scoped anchor CRs..."
+patch_clear_cluster_anchor_finalizers configs.maas.opendatahub.io default
+patch_clear_cluster_anchor_finalizers config default
+patch_clear_cluster_anchor_finalizers clustertenants.maas.opendatahub.io default
+patch_clear_cluster_anchor_finalizers clustertenant default
 kubectl delete configs.maas.opendatahub.io default --ignore-not-found --timeout=120s 2>/dev/null || true
 kubectl delete config default --ignore-not-found --timeout=120s 2>/dev/null || true
 kubectl delete clustertenants.maas.opendatahub.io default --ignore-not-found --timeout=120s 2>/dev/null || true

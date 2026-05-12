@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -134,7 +135,14 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			setTenantTrackingLabels(u, tenant)
 		} else {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
-				return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+				var already *controllerutil.AlreadyOwnedError
+				if errors.As(err, &already) {
+					log.FromContext(ctx).Info("skipping Config controller reference: object already owned by another controller",
+						"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName(),
+						"existingOwner", already)
+				} else {
+					return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+				}
 			}
 			setTenantTrackingLabels(u, tenant)
 		}

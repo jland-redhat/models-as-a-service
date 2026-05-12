@@ -338,6 +338,8 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) ma
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 
+		apiReader := mgr.GetAPIReader()
+
 		ensure := func() {
 			tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
 			var tenant maasv1alpha1.Tenant
@@ -366,8 +368,9 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) ma
 					log.Error(err, "failed to create Config")
 					return
 				}
-				if err := c.Get(ctx, ctKey, &ct); err != nil {
-					log.Error(err, "re-fetch Config after create")
+				// Avoid a cache-stale read immediately after Create: use the API reader.
+				if err := apiReader.Get(ctx, ctKey, &ct); err != nil {
+					log.Error(err, "re-read Config after create (API reader)")
 					return
 				}
 				log.Info("ensured Config exists", "name", maasv1alpha1.ConfigInstanceName)
@@ -411,8 +414,8 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace string) ma
 				return
 			}
 			base := tenant.DeepCopy()
-			if err := controllerutil.SetControllerReference(&ct, &tenant, scheme); err != nil {
-				log.Error(err, "SetControllerReference on existing Tenant")
+			if err := controllerutil.SetOwnerReference(&ct, &tenant, scheme); err != nil {
+				log.Error(err, "SetOwnerReference on existing Tenant")
 				return
 			}
 			if err := c.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {

@@ -89,6 +89,7 @@ func TestLifecycleReconciler(t *testing.T) {
 		g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
 		g.Expect(updated.OwnerReferences[0].UID).To(Equal(types.UID("cfg-uid")))
 		g.Expect(updated.OwnerReferences[0].Kind).To(Equal(maasv1alpha1.ConfigKind))
+		g.Expect(updated.OwnerReferences[0].Controller).To(BeNil())
 	})
 
 	t.Run("no-op when Deployment is terminating but legacy CleanupFinalizer is absent", func(t *testing.T) {
