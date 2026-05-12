@@ -26,19 +26,23 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // CleanupFinalizer is added to the maas-controller Deployment so that when ODH
 // deletes it (on MaaS disable), the controller can clean up Tenant CRs, RBAC,
-// and CRDs before the Deployment object is removed. Tenant finalizers cascade
-// to delete maas-api, policies, and other children.
+// and CRDs before the Deployment object is removed. Config deletion starts
+// garbage collection of platform operands owned by that anchor.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
 // componentLabel selects all resources belonging to the MaaS component.
@@ -51,12 +55,14 @@ const requeueInterval = 5 * time.Second
 // LifecycleReconciler watches the maas-controller Deployment and manages
 // the cleanup finalizer lifecycle. While running it ensures CleanupFinalizer
 // is present on the Deployment. When DeletionTimestamp is set (ODH disabled
-// MaaS) it deletes all Tenant CRs, then removes cluster-scoped RBAC and CRDs,
+// MaaS) it deletes Config first, deletes Tenant CRs, waits for them to be gone,
+// then removes cluster-scoped RBAC and CRDs,
 // then releases the finalizer so the Deployment object can be fully removed.
-// This gives Tenant's own finalizer time to clean up maas-api, auth policies,
-// Perses dashboards, and other owned resources before the controller exits.
+// Deleting Config first lets garbage collection tear down platform operands
+// owned by that anchor; Tenant CRs are then deleted and the controller waits for them to go away.
 type LifecycleReconciler struct {
 	client.Client
+	Scheme          *runtime.Scheme
 	DeploymentName  string
 	DeploymentNS    string
 	TenantNamespace string
@@ -71,6 +77,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=list;delete
 //+kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=list;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -81,7 +88,13 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if dep.DeletionTimestamp.IsZero() {
-		return ctrl.Result{}, r.ensureFinalizer(ctx, log, &dep)
+		if err := r.ensureFinalizer(ctx, log, &dep); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
 	}
 
 	if !controllerutil.ContainsFinalizer(&dep, CleanupFinalizer) {
@@ -109,11 +122,56 @@ func (r *LifecycleReconciler) ensureFinalizer(ctx context.Context, log logr.Logg
 	return nil
 }
 
+// ensureDeploymentReferencesConfig links the controller Deployment to Config/default
+// via a non-controller ownerReference so the workload participates in the same GC graph as other
+// operands without competing with the ODH operator's controller owner (when present).
+func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Context, key types.NamespacedName) error {
+	log := ctrl.LoggerFrom(ctx)
+	if r.Scheme == nil {
+		return nil
+	}
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if !cfg.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	if cfg.UID == "" {
+		return nil
+	}
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, key, &dep); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	for _, ref := range dep.OwnerReferences {
+		if ref.UID == cfg.UID && ref.Kind == maasv1alpha1.ConfigKind && ref.APIVersion == maasv1alpha1.GroupVersion.String() {
+			return nil
+		}
+	}
+	base := dep.DeepCopy()
+	if err := controllerutil.SetOwnerReference(&cfg, &dep, r.Scheme); err != nil {
+		return fmt.Errorf("set Config owner reference on deployment: %w", err)
+	}
+	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch deployment ownerReferences: %w", err)
+	}
+	log.Info("set Config owner reference on maas-controller Deployment")
+	return nil
+}
+
 // runCleanup drives the teardown sequence when the Deployment is terminating:
-// delete Tenants, wait for them to be gone, then delete RBAC and CRDs, then
-// release the finalizer.
+// delete Config (starts GC of platform operands), delete Tenants, wait for them to be gone,
+// then delete RBAC and CRDs, then release the finalizer.
 func (r *LifecycleReconciler) runCleanup(ctx context.Context, log logr.Logger, dep *appsv1.Deployment) (ctrl.Result, error) {
 	log.Info("Deployment is terminating; running cleanup before releasing finalizer")
+
+	if err := r.deleteConfig(ctx); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	pending, err := r.deleteTenants(ctx, log)
 	if err != nil {
@@ -134,6 +192,23 @@ func (r *LifecycleReconciler) runCleanup(ctx context.Context, log logr.Logger, d
 	}
 	log.Info("removed cleanup finalizer from Deployment; cleanup complete")
 	return ctrl.Result{}, nil
+}
+
+func (r *LifecycleReconciler) deleteConfig(ctx context.Context) error {
+	log := ctrl.LoggerFrom(ctx)
+	var cfg maasv1alpha1.Config
+	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+	if err := r.Get(ctx, key, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if err := r.Delete(ctx, &cfg); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete Config %s: %w", cfg.Name, err)
+	}
+	log.Info("deleted Config", "name", cfg.Name)
+	return nil
 }
 
 // deleteTenants deletes all Tenant CRs and returns true while any are still terminating.
@@ -218,7 +293,20 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
 	})
+	cfgSingleton := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetName() == maasv1alpha1.ConfigInstanceName
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
+		Watches(
+			&maasv1alpha1.Config{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(cfgSingleton),
+		).
 		Complete(r)
 }

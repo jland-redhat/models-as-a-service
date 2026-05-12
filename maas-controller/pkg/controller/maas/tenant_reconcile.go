@@ -20,9 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,9 +46,9 @@ const (
 	managementStateUnmanaged  = "Unmanaged"
 )
 
-const (
-	tenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
-)
+// legacyTenantFinalizer was used before teardown moved to Config GC + management-state Removed.
+// It is stripped on delete / idle reconcile so upgraded clusters are not stuck terminating.
+const legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 
 func managementState(ann map[string]string) string {
 	if ann == nil {
@@ -70,38 +72,15 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	// Handle delete before Removed/Unmanaged idle so we still run teardown when the CR is being deleted.
+	// Handle delete before Removed/Unmanaged idle. Legacy installs may still carry the old finalizer;
+	// strip it so the Tenant object can complete deletion (platform teardown is via Config GC).
 	if !tenant.DeletionTimestamp.IsZero() {
-		if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-			return ctrl.Result{}, nil
-		}
-		pending, err := r.finalizeTenantDeletion(ctx, &tenant)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if pending {
-			return ctrl.Result{RequeueAfter: finalizeRequeueInterval}, nil
-		}
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
-		if err := r.Patch(ctx, &tenant, patchBase); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.stripLegacyTenantFinalizerIfPresent(ctx, &tenant)
 	}
 
 	ms := managementState(tenant.Annotations)
 	if ms == managementStateRemoved || ms == managementStateUnmanaged {
 		return r.handleIdleManagementState(ctx, &tenant, ms)
-	}
-
-	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-		if err := r.Patch(ctx, &tenant, patchBase); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if ms != "" && ms != managementStateManaged {
@@ -110,6 +89,14 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	mcfg, wait, err := r.readyConfigOrWait(ctx, log, &tenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if wait != nil {
+		return *wait, nil
 	}
 
 	orig := tenant.DeepCopy()
@@ -177,7 +164,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{RequeueAfter: 45 * time.Second}, nil
 	}
 
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, &tenant, r.ManifestPath, appNs)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, &tenant, r.ManifestPath, appNs, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(&tenant, false, "PlatformReconcileFailed", err.Error())
@@ -225,31 +212,115 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
+// readyConfigOrWait returns the singleton Config when it exists, is not deleting,
+// and has a UID. Otherwise it updates Tenant status and returns a Result the caller should return
+// immediately without running gateway, dependency, prerequisite, or platform work.
+func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (*maasv1alpha1.Config, *ctrl.Result, error) {
+	var ct maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ct); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Config not found; skipping reconcile until it exists", "name", maasv1alpha1.ConfigInstanceName)
+			if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "ConfigMissing",
+				fmt.Sprintf("Config %q is required before platform apply", maasv1alpha1.ConfigInstanceName)); err2 != nil {
+				return nil, nil, err2
+			}
+			res := ctrl.Result{RequeueAfter: 10 * time.Second}
+			return nil, &res, nil
+		}
+		return nil, nil, err
+	}
+	if !ct.DeletionTimestamp.IsZero() {
+		log.Info("Config is terminating; skipping platform reconcile", "name", ct.Name)
+		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "ConfigTerminating",
+			fmt.Sprintf("Config %q is deleting; platform reconcile is suspended until the anchor is gone or recreated", ct.Name)); err != nil {
+			return nil, nil, err
+		}
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return nil, &res, nil
+	}
+	if ct.UID == "" {
+		res := ctrl.Result{RequeueAfter: 5 * time.Second}
+		return nil, &res, nil
+	}
+	return &ct, nil, nil
+}
+
+// SkipConfigBootstrap returns true when the default Tenant is in Removed management state.
+// The manager startup runnable must not recreate Config or patch owner refs in that state,
+// because Removed reconciliation deletes Config to drive platform GC.
+func SkipConfigBootstrap(tenant *maasv1alpha1.Tenant) bool {
+	if tenant == nil || tenant.Annotations == nil {
+		return false
+	}
+	return tenant.Annotations[managementStateAnnotation] == managementStateRemoved
+}
+
+func (r *TenantReconciler) stripLegacyTenantFinalizerIfPresent(ctx context.Context, tenant *maasv1alpha1.Tenant) error {
+	if !controllerutil.ContainsFinalizer(tenant, legacyTenantFinalizer) {
+		return nil
+	}
+	base := client.MergeFrom(tenant.DeepCopy())
+	controllerutil.RemoveFinalizer(tenant, legacyTenantFinalizer)
+	return r.Patch(ctx, tenant, base)
+}
+
+// ensureConfigDeletedForRemoval issues delete on Config/default when present.
+// It requeues while the object is still terminating so callers can observe progress.
+func (r *TenantReconciler) ensureConfigDeletedForRemoval(ctx context.Context) (*ctrl.Result, error) {
+	var ct maasv1alpha1.Config
+	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+	if err := r.Get(ctx, key, &ct); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !ct.DeletionTimestamp.IsZero() {
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res, nil
+	}
+	if err := r.Delete(ctx, &ct); err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	res := ctrl.Result{RequeueAfter: 10 * time.Second}
+	return &res, nil
+}
+
 // handleIdleManagementState handles Removed and Unmanaged states.
-// Removed tears down owned resources before dropping the finalizer;
-// Unmanaged simply drops the finalizer, leaving resources in place.
+// Removed deletes Config/default so platform operands are garbage-collected; Unmanaged
+// leaves resources in place. Any legacy Tenant finalizer from older releases is stripped.
 func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
 	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
 		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
 		return ctrl.Result{}, err
 	}
-	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
-		if ms == managementStateRemoved {
-			pending, err := r.finalizeTenantDeletion(ctx, tenant)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
-			if pending {
-				return ctrl.Result{RequeueAfter: finalizeRequeueInterval}, nil
-			}
-		}
-		patchBase := client.MergeFrom(tenant.DeepCopy())
-		controllerutil.RemoveFinalizer(tenant, tenantFinalizer)
-		if err := r.Patch(ctx, tenant, patchBase); err != nil {
+	if ms == managementStateRemoved {
+		requeue, err := r.ensureConfigDeletedForRemoval(ctx)
+		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if err := r.stripLegacyTenantFinalizerIfPresent(ctx, tenant); err != nil {
+			return ctrl.Result{}, err
+		}
+		if requeue != nil {
+			return *requeue, nil
+		}
+		return ctrl.Result{}, nil
+	}
+	if err := r.stripLegacyTenantFinalizerIfPresent(ctx, tenant); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *TenantReconciler) operatorNamespace() string {
+	if r.OperatorNamespace != "" {
+		return r.OperatorNamespace
+	}
+	if ns := os.Getenv("POD_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return os.Getenv("WATCH_NAMESPACE")
 }
 
 func applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

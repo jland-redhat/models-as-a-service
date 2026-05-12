@@ -26,7 +26,11 @@ The `RELATED_IMAGE_ODH_MAAS_API_IMAGE` environment variable controls which `maas
 
 **Self-bootstrap singleton.** The controller creates `default-tenant` on startup if it does not exist. A CEL validation rule (`self.metadata.name == 'default-tenant'`) enforces exactly one Tenant per namespace. This is consistent with the ODH component lifecycle (DSC enables → operator deploys controller → controller creates CR) while keeping the platform workload lifecycle inside `maas-controller`.
 
-**Cross-namespace ownership.** The Tenant CR lives in the app namespace but five resources are created in the gateway namespace (`openshift-ingress`): `AuthPolicy`, `TokenRateLimitPolicy`, `DestinationRule`, `TelemetryPolicy`, and `Istio Telemetry`. Kubernetes rejects cross-namespace `ownerReference`, so these use tracking labels instead:
+**Config anchor.** The cluster-scoped `Config` named `default` is the Kubernetes controller owner for platform operands (maas-api workloads, gateway policies, cluster RBAC, and so on). Namespaced children in any namespace may reference this cluster-scoped owner. The namespace-scoped `Tenant` (`default-tenant`) is also owned by `Config` so garbage collection removes it when the anchor is deleted. The controller ensures `Config` and `Tenant` exist at startup; the ODH bundle also ships `deployment/base/maas-controller/default/config-default.yaml` so the operator can apply the anchor with the rest of the install. When the `Tenant` is set to `managementState: Removed`, the Tenant reconciler deletes `Config/default` first so operand teardown is driven by garbage collection; the manager bootstrap runnable skips recreating `Config` while `Removed` is in effect.
+
+**RBAC (ODH reconciler).** `ClusterRole/maas-controller-role` is owned by the `ModelsAsService` component CR and the operator resets its rules to its embedded manifest, which may omit `configs` until the operator ships that API. A separate `ClusterRole` + `ClusterRoleBinding` (`maas-controller-cluster-config-role` → the same `maas-controller` ServiceAccount) grants only `configs` verbs and is not operator-owned, so it persists and merges at authorization time with the primary binding.
+
+**Cross-namespace ownership.** The `Tenant` CR lives in the subscription namespace (default `models-as-a-service`), while `maas-api` runs in the application namespace (e.g. `opendatahub`). Kubernetes rejects a namespaced owner in a different namespace, so platform resources do **not** use `Tenant` as the controller owner. Instead they use `Config` as controller owner and carry tracking labels (`maas.opendatahub.io/tenant-name`, `maas.opendatahub.io/tenant-namespace`) for human inspection and for any non-owner-driven automation. Example labels:
 
 ```yaml
 labels:
@@ -34,7 +38,7 @@ labels:
   maas.opendatahub.io/tenant-namespace: models-as-a-service
 ```
 
-Same-namespace children use standard `ownerReference` (automatic GC). Cluster-scoped and cross-namespace children use tracking labels and are cleaned up by the Tenant finalizer via label queries.
+The `maas-controller` Deployment in the application namespace is never given a controller owner reference to itself; it only receives the tracking labels above when present in the rendered manifests.
 
 ### Subscription model
 

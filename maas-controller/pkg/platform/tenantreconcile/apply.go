@@ -114,19 +114,28 @@ func ApplyParams(componentPath, file string, imageParamsMap map[string]string, e
 	return nil
 }
 
-// ApplyRendered server-side-applies rendered objects with Tenant as controller owner (ODH deploy parity).
-// Same-namespace children get a standard ownerReference; cluster-scoped and cross-namespace children
-// get tracking labels instead (Kubernetes forbids cross-namespace and namespaced-to-cluster ownerReferences).
-func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, objs []unstructured.Unstructured) error {
+// ApplyRendered server-side-applies rendered objects with Config as controller owner.
+//
+// The cluster-scoped Config is a valid owner for namespaced resources in any namespace
+// and for cluster-scoped operands. Tenant tracking labels are always applied so the Tenant
+// reconciler can correlate resources with the subscription-namespace Tenant CR for status and debugging.
+//
+// The maas-controller Deployment in the application namespace is never given a Config
+// controller reference to itself (invalid); it only receives tracking labels.
+func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
+	if mcfg == nil || mcfg.UID == "" {
+		return fmt.Errorf("Config with UID is required for platform apply")
+	}
+
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
-		childNs := u.GetNamespace()
-		if childNs != "" && childNs == tenant.Namespace {
-			if err := controllerutil.SetControllerReference(tenant, u, scheme); err != nil {
-				return fmt.Errorf("set controller reference on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
-			}
+		if isMaaSControllerDeployment(u, appNs) {
+			setTenantTrackingLabels(u, tenant)
 		} else {
+			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
+				return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+			}
 			setTenantTrackingLabels(u, tenant)
 		}
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
@@ -149,6 +158,13 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		}
 	}
 	return nil
+}
+
+func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool {
+	if appNs == "" || u.GetNamespace() != appNs {
+		return false
+	}
+	return strings.EqualFold(u.GetKind(), "Deployment") && u.GetName() == MaaSControllerDeploymentName
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {

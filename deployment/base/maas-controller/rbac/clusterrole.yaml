@@ -175,24 +175,7 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
-  - externalmodels
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
-  - externalmodels/finalizers
-  - maasauthpolicies/finalizers
-  - maasmodelrefs/finalizers
-  - maassubscriptions/finalizers
-  - tenants/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
+  - configs
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
@@ -208,6 +191,17 @@ rules:
 - apiGroups:
   - maas.opendatahub.io
   resources:
+  - configs/finalizers
+  - externalmodels/finalizers
+  - maasauthpolicies/finalizers
+  - maasmodelrefs/finalizers
+  - maassubscriptions/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - configs/status
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status
@@ -216,6 +210,14 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - externalmodels
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - monitoring.coreos.com
   resources:
