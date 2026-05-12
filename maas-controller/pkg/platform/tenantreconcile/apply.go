@@ -121,8 +121,9 @@ func ApplyParams(componentPath, file string, imageParamsMap map[string]string, e
 // and for cluster-scoped operands. Tenant tracking labels are always applied so the Tenant
 // reconciler can correlate resources with the subscription-namespace Tenant CR for status and debugging.
 //
-// The maas-controller Deployment in the application namespace is never given a Config
-// controller reference to itself (invalid); it only receives tracking labels.
+// Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
+// Config controller ownerReference; they still receive tenant tracking labels. Add predicates
+// there for future exceptions (e.g. shared config that must outlive Config GC).
 func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
 		return fmt.Errorf("Config with UID is required for platform apply")
@@ -131,7 +132,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
-		if isMaaSControllerDeployment(u, appNs) {
+		if skipConfigControllerOwnerRef(u, appNs) {
 			setTenantTrackingLabels(u, tenant)
 		} else {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
@@ -166,6 +167,30 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		}
 	}
 	return nil
+}
+
+// configOwnerRefSkip matches rendered objects that must not get Config as controller owner
+// (invalid self-reference, or operands that should not cascade-delete with Config).
+type configOwnerRefSkip func(u *unstructured.Unstructured, appNs string) bool
+
+// configOwnerRefSkips is evaluated in order; add new predicates here for additional exceptions.
+var configOwnerRefSkips = []configOwnerRefSkip{
+	isMaaSControllerDeployment,
+	func(u *unstructured.Unstructured, appNs string) bool {
+		if appNs == "" || u.GetNamespace() != appNs {
+			return false
+		}
+		return strings.EqualFold(u.GetKind(), "ConfigMap") && u.GetName() == MaaSParametersConfigMapName
+	},
+}
+
+func skipConfigControllerOwnerRef(u *unstructured.Unstructured, appNs string) bool {
+	for _, fn := range configOwnerRefSkips {
+		if fn(u, appNs) {
+			return true
+		}
+	}
+	return false
 }
 
 func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool {
