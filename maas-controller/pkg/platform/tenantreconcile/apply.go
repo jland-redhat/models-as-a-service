@@ -126,7 +126,7 @@ func ApplyParams(componentPath, file string, imageParamsMap map[string]string, e
 // there for future exceptions (e.g. shared config that must outlive Config GC).
 func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
-		return fmt.Errorf("Config with UID is required for platform apply")
+		return errors.New("config with UID is required for platform apply")
 	}
 
 	for i := range objs {
