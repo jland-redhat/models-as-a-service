@@ -4,8 +4,6 @@ For **inference** with **MaaS API keys** (`Authorization: Bearer sk-oai-…`), M
 
 **Rule:** Kuadrant allows **one `AuthPolicy` and one `TokenRateLimitPolicy` per `HTTPRoute` target**. **`MaaSAuthPolicy`** CRs aggregate into a single **`AuthPolicy`**; **`MaaSSubscription`** CRs aggregate into a single **`TokenRateLimitPolicy`** (name patterns such as `maas-auth-<modelName>` and `maas-trlp-<modelName>` in the model namespace). Implementation: **`maasauthpolicy_controller.go`**, **`maassubscription_controller.go`**.
 
-Link from other markdown, e.g. `[Gateway policies (inference)](../maas-controller/docs/gateway-policy-layers.md)`.
-
 ---
 
 ## AuthPolicy on the HTTPRoute
