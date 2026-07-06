@@ -1,0 +1,123 @@
+name: Auto-update approved PR branches
+
+# When main moves, merge it into open PRs that are approved and labeled
+# ready-for-review so contributors do not need to click "Update branch".
+#
+# Eligibility: open, non-draft PRs targeting the pushed base branch with all
+# labels listed in jobs.autoupdate.env.REQUIRED_LABELS (all required).
+#
+# Same-repo PRs (branch in this repository) are updated like the GitHub UI
+# "Update branch" button. Fork PRs only work when the author enabled "Allow
+# edits from maintainers"; otherwise update-branch fails and is logged.
+#
+# PRs with merge conflicts are skipped (update-branch API fails safely).
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-auto-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  autoupdate:
+    name: Update eligible PR branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Comma-separated; PR must have every label (AND, not OR).
+      REQUIRED_LABELS: ready-for-review,approved
+
+    steps:
+      - name: Update branches for approved, ready-for-review PRs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const base = context.eventName === 'workflow_dispatch'
+              ? 'main'
+              : context.ref.replace('refs/heads/', '');
+
+            const requiredLabels = process.env.REQUIRED_LABELS
+              .split(',')
+              .map((label) => label.trim())
+              .filter(Boolean);
+
+            /** @returns {Promise<import('@octokit/rest').RestEndpointMethodTypes['pulls']['list']['response']['data']>} */
+            async function listOpenPullRequests() {
+              const all = [];
+              let page = 1;
+              while (true) {
+                const { data } = await github.rest.pulls.list({
+                  owner,
+                  repo,
+                  state: 'open',
+                  base,
+                  per_page: 100,
+                  page,
+                });
+                all.push(...data);
+                if (data.length < 100) break;
+                page += 1;
+              }
+              return all;
+            }
+
+            function hasLabels(pr, labels) {
+              const present = new Set(pr.labels.map((label) => label.name));
+              return labels.every((label) => present.has(label));
+            }
+
+            const prs = await listOpenPullRequests();
+            const eligible = prs.filter(
+              (pr) => !pr.draft && hasLabels(pr, requiredLabels),
+            );
+
+            core.info(
+              `Found ${prs.length} open PR(s) targeting ${base}; ` +
+                `${eligible.length} eligible (${requiredLabels.join(' + ')})`,
+            );
+
+            let updated = 0;
+            let failed = 0;
+            const failures = [];
+
+            for (const pr of eligible) {
+              try {
+                await github.rest.pulls.updateBranch({
+                  owner,
+                  repo,
+                  pull_number: pr.number,
+                  expected_head_sha: pr.head.sha,
+                });
+                core.info(`Updated PR #${pr.number}: ${pr.title}`);
+                updated += 1;
+              } catch (error) {
+                failed += 1;
+                const message = error?.message ?? String(error);
+                failures.push(`#${pr.number}: ${message}`);
+                core.warning(`Failed to update PR #${pr.number}: ${message}`);
+              }
+            }
+
+            core.summary.addHeading('PR branch auto-update');
+            core.summary.addList([
+              `Base branch: \`${base}\``,
+              `Open PRs: ${prs.length}`,
+              `Eligible (${requiredLabels.join(' + ')}): ${eligible.length}`,
+              `Updated: ${updated}`,
+              `Failed: ${failed}`,
+            ]);
+            if (failures.length > 0) {
+              core.summary.addHeading('Failures', 3);
+              core.summary.addList(failures);
+            }
+            await core.summary.write();
