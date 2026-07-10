@@ -366,6 +366,8 @@ func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 	return nil
 }
 
+const rhclWasmFilterName = "envoy.filters.http.wasm"
+
 func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
 	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
 }
@@ -402,41 +404,47 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 6 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 6 entries, got %d", len(configPatches))
+	const (
+		filterPatchCount      = 4 // WasmPlugin pair + RHCL wasm pair
+		routeDisablePatchBase = filterPatchCount
+		totalConfigPatches    = routeDisablePatchBase + 4
+	)
+	if !found || len(configPatches) < totalConfigPatches {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", totalConfigPatches, len(configPatches))
 	}
 
-	clusterByIndex := []string{beforeCluster, afterCluster}
+	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster}
+	subFilterByIndex := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
 
-	for i, clusterName := range clusterByIndex {
+	for i := 0; i < filterPatchCount; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
 		}
 
 		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
-		if err := unstructured.SetNestedField(patch, anchorName, subFilterPath...); err != nil {
+		if err := unstructured.SetNestedField(patch, subFilterByIndex[i], subFilterPath...); err != nil {
 			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
 		}
 
 		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterName, clusterPath...); err != nil {
+		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
 			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
 		}
 
 		configPatches[i] = patch
 	}
 
-	// Patches 2–5 disable ext_proc on all non-inference maas-api routes.
+	// Patches 4–7 disable ext_proc on all non-inference maas-api routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
 	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := 2; i < 6; i++ {
+	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
 		}
 		if err := unstructured.SetNestedField(patch,
-			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2),
+			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-routeDisablePatchBase),
 			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
 			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
 		}
