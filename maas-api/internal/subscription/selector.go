@@ -171,6 +171,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
+	aliasCandidates := buildModelAliasCandidates(s.buildModelIndex())
+	rawRequestedModel := requestedModel
+
 	if len(subscriptions) == 0 {
 		return nil, &NoSubscriptionError{}
 	}
@@ -188,6 +191,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
+				requestedModel = resolveRequestedModelForSubscription(rawRequestedModel, aliasCandidates, &sub)
 				// Validate subscription includes the requested model
 				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
@@ -209,6 +213,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
+				requestedModel = resolveRequestedModelForSubscription(rawRequestedModel, aliasCandidates, &sub)
 				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
 				}
@@ -229,7 +234,8 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	for _, sub := range subscriptions {
 		if userHasAccess(&sub, username, groups) {
 			// If model is specified, only include subscriptions that contain that model
-			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
+			resolvedModel := resolveRequestedModelForSubscription(rawRequestedModel, aliasCandidates, &sub)
+			if rawRequestedModel != "" && !subscriptionIncludesModel(&sub, resolvedModel) {
 				continue
 			}
 			accessibleSubs = append(accessibleSubs, sub)
@@ -241,8 +247,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	}
 
 	if len(accessibleSubs) == 1 {
+		resolvedModel := resolveRequestedModelForSubscription(rawRequestedModel, aliasCandidates, &accessibleSubs[0])
 		// Check model health for Degraded subscriptions
-		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
+		if err := checkModelHealth(&accessibleSubs[0], resolvedModel); err != nil {
 			return nil, err
 		}
 		return toResponse(&accessibleSubs[0]), nil

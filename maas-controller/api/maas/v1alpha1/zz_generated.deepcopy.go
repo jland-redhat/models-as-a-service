@@ -613,6 +613,11 @@ func (in *MaaSModelStatus) DeepCopyInto(out *MaaSModelStatus) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.ModelAliases != nil {
+		in, out := &in.ModelAliases, &out.ModelAliases
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

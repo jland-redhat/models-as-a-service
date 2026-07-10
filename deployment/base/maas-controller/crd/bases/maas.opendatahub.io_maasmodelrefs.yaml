@@ -198,6 +198,16 @@ spec:
                 description: HTTPRouteNamespace is the namespace of the HTTPRoute
                   associated with this model
                 type: string
+              modelAliases:
+                description: |-
+                  ModelAliases lists known model identity strings for this MaaSModelRef.
+                  The first entry is always the canonical MaaS identity (namespace/name of this resource).
+                  Additional entries are backend-specific aliases (for example KServe publishers/ paths
+                  and OpenAI model IDs) used to resolve body-routed inference requests during auth checks.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
               phase:
                 description: |-
                   Phase represents the current phase of the model.

@@ -20,16 +20,25 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
+
+var llmInferenceServiceGVK = schema.GroupVersionKind{
+	Group:   "serving.kserve.io",
+	Version: "v1alpha1",
+	Kind:    "LLMInferenceService",
+}
 
 // llmisvcHandler implements BackendHandler for kind "llmisvc" (LLMInferenceService).
 type llmisvcHandler struct {
@@ -150,6 +159,43 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 		}
 	}
 	return endpoint, true, nil
+}
+
+// collectModelAliases returns canonical MaaS identity first, followed by backend model aliases
+// discovered from LLMInferenceService status (for example publishers/ paths and OpenAI model IDs).
+func (h *llmisvcHandler) collectModelAliases(ctx context.Context, model *maasv1alpha1.MaaSModelRef) []string {
+	primary := modelRefKey(model.Namespace, model.Name)
+	extras := make([]string, 0, 4)
+
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(llmInferenceServiceGVK)
+	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+	if err := h.r.Get(ctx, key, u); err != nil {
+		if !apierrors.IsNotFound(err) {
+			logr.FromContextOrDiscard(ctx).Error(err, "failed to fetch LLMInferenceService for model alias discovery",
+				"llmisvc", model.Spec.ModelRef.Name, "namespace", model.Namespace)
+		}
+		return orderedUniqueStrings(primary, nil)
+	}
+
+	addresses, _, _ := unstructured.NestedSlice(u.Object, "status", "addresses")
+	for i := range addresses {
+		addrIdx := strconv.Itoa(i)
+		for j := 0; ; j++ {
+			name, found, _ := unstructured.NestedString(u.Object, "status", "addresses", addrIdx, "models", strconv.Itoa(j), "name")
+			if !found || name == "" {
+				break
+			}
+			extras = append(extras, name)
+		}
+	}
+
+	if servedName, _, _ := unstructured.NestedString(u.Object, "spec", "model", "name"); servedName != "" {
+		extras = append(extras, fmt.Sprintf("publishers/%s/models/%s", model.Namespace, servedName))
+		extras = append(extras, servedName)
+	}
+
+	return orderedUniqueStrings(primary, extras)
 }
 
 // GetModelEndpoint returns the model endpoint URL using gateway/HTTPRoute hostname and path.

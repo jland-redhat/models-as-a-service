@@ -68,6 +68,8 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo ""
     echo "This script validates that the MaaS platform is correctly deployed and functional."
     echo "It performs checks on components, gateway status, policies, and API endpoints."
+    echo "Inference is validated via path-based routing (model URL from /v1/models) and"
+    echo "body-based routing (POST /v1/<endpoint> with model in the JSON body)."
     echo ""
     echo "Arguments:"
     echo "  MODEL_NAME    Optional. Name of a specific model to use for validation."
@@ -733,6 +735,50 @@ else
         else
             print_fail "Model inference failed (HTTP $HTTP_CODE)" "Response: $(echo $RESPONSE_BODY | head -c 200)" "Check model pod logs and HTTPRoute configuration, this model may also have a different response format"
           
+        fi
+    fi
+
+    # Test body-based routing (model identity from JSON body via payload-pre-processing ext_proc)
+    if [ -n "$TOKEN" ] && [ -n "$MODEL_NAME" ]; then
+        print_check "Body-based model routing"
+        BODY_ROUTE_ENDPOINT="${HOST}/v1/${INFERENCE_ENDPOINT}"
+        REQUEST_PAYLOAD="${DEFAULT_REQUEST_PAYLOAD//\$\{MODEL_NAME\}/$MODEL_NAME}"
+
+        print_info "Testing: curl -sSk -X POST ${BODY_ROUTE_ENDPOINT} -H \"Authorization: Bearer \$TOKEN\" -H \"Content-Type: application/json\" -d '${REQUEST_PAYLOAD}'"
+
+        BODY_ROUTE_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 -w "\n%{http_code}" \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "${REQUEST_PAYLOAD}" \
+            "${BODY_ROUTE_ENDPOINT}" 2>/dev/null || echo "")
+
+        HTTP_CODE=$(echo "$BODY_ROUTE_RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$BODY_ROUTE_RESPONSE" | sed '$d')
+
+        if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" = "000" ]; then
+            print_fail "Connection timeout or failed to reach body-routed endpoint" \
+                "Could not reach ${BODY_ROUTE_ENDPOINT}" \
+                "Check Gateway and payload-processing EnvoyFilter: kubectl get envoyfilter payload-processing -n openshift-ingress"
+        elif [ "$HTTP_CODE" = "200" ]; then
+            print_success "Body-based model routing working (${BODY_ROUTE_ENDPOINT})"
+            print_info "Response: $(echo $RESPONSE_BODY | head -c 200)"
+        elif [ "$HTTP_CODE" = "404" ]; then
+            print_fail "Body-based routing not configured (HTTP 404 route_not_found)" \
+                "Gateway has no route for ${BODY_ROUTE_ENDPOINT} with model in body" \
+                "Check payload-processing ext_proc filters on the gateway (ipp-pre sets X-Gateway-Model-Name): kubectl get envoyfilter payload-processing -n openshift-ingress -o yaml" \
+                "Verify ext_proc in gateway config: kubectl exec -n openshift-ingress deploy/maas-default-gateway-openshift-default -- pilot-agent request GET config_dump | grep ext_proc"
+        elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
+            print_fail "Body-based routing auth failed (HTTP $HTTP_CODE)" \
+                "Response: $(echo $RESPONSE_BODY | head -c 200)" \
+                "Check AuthPolicy and that payload-pre-processing is running: kubectl get pods -n openshift-ingress -l app=payload-pre-processing"
+        elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
+            print_fail "Body-based routing gateway error (HTTP $HTTP_CODE)" \
+                "ext_proc or backend may be unavailable" \
+                "Check payload-pre-processing and payload-processing logs: kubectl logs -n openshift-ingress deploy/payload-pre-processing --tail=50"
+        else
+            print_fail "Body-based routing failed (HTTP $HTTP_CODE)" \
+                "Response: $(echo $RESPONSE_BODY | head -c 200)" \
+                "Compare with path-based inference above; 404 usually means ext_proc is not wired into the gateway filter chain"
         fi
     fi
     

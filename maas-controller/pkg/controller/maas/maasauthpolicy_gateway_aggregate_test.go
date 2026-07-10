@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -39,10 +40,25 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 	)
 	policyOtherNamespace.Spec.Subjects.Users = []string{"user-z"}
 
+	modelRefA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "llm"},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ModelAliases: []string{
+				"llm/model-a",
+				"publishers/llm/models/foo/bar",
+				"foo/bar",
+			},
+		},
+	}
+	modelRefB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: "llm"},
+	}
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(policyA, policyB, policyOtherNamespace).
+		WithObjects(policyA, policyB, policyOtherNamespace, modelRefA, modelRefB).
+		WithStatusSubresource(modelRefA, modelRefB).
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
@@ -58,24 +74,34 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 		t.Fatalf("aggregateModelSubjectAllowlists returned error: %v", err)
 	}
 
-	if len(allowlists) != 2 {
-		t.Fatalf("expected 2 model allowlist entries, got %d", len(allowlists))
+	if len(allowlists) != 4 {
+		t.Fatalf("expected 4 model allowlist entries (including aliases), got %d", len(allowlists))
 	}
 
-	modelA := allowlists["llm/model-a"]
-	if got, want := strings.Join(modelA.Groups, ","), "group-a,group-b"; got != want {
+	modelAAllowlist := allowlists["llm/model-a"]
+	if got, want := strings.Join(modelAAllowlist.Groups, ","), "group-a,group-b"; got != want {
 		t.Fatalf("model-a groups = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(modelA.Users, ","), "user-a,user-b"; got != want {
+	if got, want := strings.Join(modelAAllowlist.Users, ","), "user-a,user-b"; got != want {
 		t.Fatalf("model-a users = %q, want %q", got, want)
 	}
 
-	modelB := allowlists["llm/model-b"]
-	if got, want := strings.Join(modelB.Groups, ","), "group-a"; got != want {
+	modelBAllowlist := allowlists["llm/model-b"]
+	if got, want := strings.Join(modelBAllowlist.Groups, ","), "group-a"; got != want {
 		t.Fatalf("model-b groups = %q, want %q", got, want)
 	}
-	if got, want := strings.Join(modelB.Users, ","), "user-a"; got != want {
+	if got, want := strings.Join(modelBAllowlist.Users, ","), "user-a"; got != want {
 		t.Fatalf("model-b users = %q, want %q", got, want)
+	}
+
+	for _, alias := range []string{"publishers/llm/models/foo/bar", "foo/bar"} {
+		entry, ok := allowlists[alias]
+		if !ok {
+			t.Fatalf("expected alias key %q in allowlists", alias)
+		}
+		if got, want := strings.Join(entry.Groups, ","), "group-a,group-b"; got != want {
+			t.Fatalf("alias %q groups = %q, want %q", alias, got, want)
+		}
 	}
 
 	allowlistsJSON, err := json.Marshal(allowlists)

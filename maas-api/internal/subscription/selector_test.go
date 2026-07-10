@@ -1218,3 +1218,43 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestSelector_SelectRequestedModelAlias(t *testing.T) {
+	log := logger.Production()
+
+	sub := createSubscription("simulator-subscription", []string{"g1"}, nil, 1, defaultTestTokenRateLimit, "", "")
+	sub.Object["spec"].(map[string]any)["modelRefs"] = []any{
+		map[string]any{
+			"name":      "facebook-opt-125m-simulated",
+			"namespace": "llm",
+		},
+	}
+
+	modelRef := createMaaSModelRef("facebook-opt-125m-simulated", "llm", "LLMInferenceService")
+	modelRef.Object["status"] = map[string]any{
+		"modelAliases": []any{
+			"llm/facebook-opt-125m-simulated",
+			"publishers/llm/models/facebook/opt-125m",
+			"facebook/opt-125m",
+		},
+	}
+
+	lister := &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}
+	modelLister := &fakeModelLister{items: []*unstructured.Unstructured{modelRef}}
+	selector := subscription.NewSelector(log, lister, modelLister, nil)
+
+	for _, requestedModel := range []string{
+		"publishers/llm/models/facebook/opt-125m",
+		"facebook/opt-125m",
+	} {
+		t.Run(requestedModel, func(t *testing.T) {
+			result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
+			if err != nil {
+				t.Fatalf("Select(%q) returned error: %v", requestedModel, err)
+			}
+			if result.Name != "simulator-subscription" {
+				t.Fatalf("Select(%q) = subscription %q, want simulator-subscription", requestedModel, result.Name)
+			}
+		})
+	}
+}

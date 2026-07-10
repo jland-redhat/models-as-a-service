@@ -174,6 +174,15 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		model.Status.Endpoint = endpoint
 	}
 
+	switch kind {
+	case "LLMInferenceService":
+		if lh, ok := handler.(*llmisvcHandler); ok {
+			model.Status.ModelAliases = lh.collectModelAliases(ctx, model)
+		}
+	default:
+		model.Status.ModelAliases = nil
+	}
+
 	governed := r.checkGovernanceAttached(ctx, model)
 	r.setGovernanceCondition(model, governed)
 	r.setRuntimeReadyCondition(model, runtimeReady)

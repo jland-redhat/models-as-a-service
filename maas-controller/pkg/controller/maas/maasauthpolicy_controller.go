@@ -331,10 +331,10 @@ const (
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
 )
 
-// celModelIdentity extracts model identity (namespace/name) from the request at gateway level.
+// celModelIdentity extracts model identity from the request at gateway level.
 // For path-routed inference (/<model-namespace>/<model-name>/...), extract from URL.
-// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc).
-// Canonical model IDs (publishers/{ns}/models/{name}) are normalized to {ns}/{name}.
+// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc) as-is.
+// Alias resolution to MaaSModelRef identity happens in auth allowlists and maas-api subscription select.
 // For listing endpoints like /v1/models where no model target exists, returns empty string
 // so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
 const (
@@ -342,13 +342,12 @@ const (
 	celPathModelIdentityAvailable = `size(` + celPathParts + `) >= 2 && ` +
 		celPathParts + `[0] != "v1" && ` +
 		celPathParts + `[0] != "maas-api"`
+	celGatewayModelNameHeader = `request.headers["x-gateway-model-name"]`
 	celModelIdentityAvailable = `(` + celPathModelIdentityAvailable + ` || "x-gateway-model-name" in request.headers)`
 	celModelIdentity          = `(` + celPathModelIdentityAvailable +
 		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
 		` : ("x-gateway-model-name" in request.headers` +
-		`   ? (request.headers["x-gateway-model-name"].startsWith("publishers/")` +
-		`     ? request.headers["x-gateway-model-name"].split("/")[1] + "/" + request.headers["x-gateway-model-name"].split("/")[3]` +
-		`     : request.headers["x-gateway-model-name"])` +
+		`   ? ` + celGatewayModelNameHeader +
 		`   : ""))`
 )
 
@@ -739,14 +738,10 @@ path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
 
 raw_header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
 
-header_model_identity := sprintf("%%s/%%s", [split(raw_header_model_identity, "/")[1], split(raw_header_model_identity, "/")[3]]) {
-	startswith(raw_header_model_identity, "publishers/")
-} else := raw_header_model_identity
-
 model_identity := path_model_identity {
 	path_model_identity != ""
-} else := header_model_identity {
-	header_model_identity != ""
+} else := raw_header_model_identity {
+	raw_header_model_identity != ""
 } else := ""
 
 username := input.auth.metadata.apiKeyValidation.username
@@ -1306,6 +1301,24 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 			aggregate[key] = entry
 		}
 	}
+
+	aliasesByModelKey := make(map[string][]string, len(aggregate))
+	for modelKey := range aggregate {
+		namespace, name, ok := parseModelRefKey(modelKey)
+		if !ok {
+			continue
+		}
+		model := &maasv1alpha1.MaaSModelRef{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, model); err != nil {
+			continue
+		}
+		aliases := model.Status.ModelAliases
+		if len(aliases) == 0 {
+			aliases = []string{modelKey}
+		}
+		aliasesByModelKey[modelKey] = aliases
+	}
+	expandAllowlistAliases(aggregate, aliasesByModelKey)
 
 	return aggregate, nil
 }

@@ -119,6 +119,14 @@ type MaaSModelStatus struct {
 	// +optional
 	HTTPRouteHostnames []string `json:"httpRouteHostnames,omitempty"`
 
+	// ModelAliases lists known model identity strings for this MaaSModelRef.
+	// The first entry is always the canonical MaaS identity (namespace/name of this resource).
+	// Additional entries are backend-specific aliases (for example KServe publishers/ paths
+	// and OpenAI model IDs) used to resolve body-routed inference requests during auth checks.
+	// +optional
+	// +listType=set
+	ModelAliases []string `json:"modelAliases,omitempty"`
+
 	// Conditions represent the latest available observations of the model's state.
 	// Condition types include:
 	//   - Ready: overall readiness (governance + runtime).
