@@ -405,7 +405,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
 	const (
-		filterPatchCount      = 4 // WasmPlugin pair + RHCL wasm pair
+		filterPatchCount      = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routeDisablePatchBase = filterPatchCount
 		totalConfigPatches    = routeDisablePatchBase + 4
 	)

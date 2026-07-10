@@ -64,8 +64,8 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
-    # RHCL injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
-    # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL.
+    # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
+    # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL 1.4.
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY

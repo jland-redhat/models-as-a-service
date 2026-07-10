@@ -174,7 +174,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
 
 	// Verify dual-stage filter chain with dual anchors:
-	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL),
+	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
 	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
