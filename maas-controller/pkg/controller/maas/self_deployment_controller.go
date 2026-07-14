@@ -18,17 +18,23 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
@@ -45,23 +52,37 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
+// envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
+const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
+
+// envoyFilterName is the name of the usage-logs EnvoyFilter resource.
+const envoyFilterName = "maas-model-access-logs"
+
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
-// It links the Deployment and default Tenant to Config via non-controller ownerReferences (same
-// relationship shape for both). Legacy CleanupFinalizer entries are removed when present.
+// It links the Deployment, default AITenant, and default MaasTenantConfig to Config via non-controller
+// ownerReferences (same relationship shape for all). Legacy CleanupFinalizer entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
 	DeploymentName              string
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
+	AITenantNamespace           string
+	GatewayNamespace            string
+	ObservabilityManifestsPath  string
+	MonitoringNamespace         string
+	EnvoyFilterManifestPath     string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
+//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -82,12 +103,17 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else if res != nil {
 			return *res, nil
 		}
+		if res, err := r.ensureDefaultAITenantReferencesConfig(ctx); err != nil {
+			return ctrl.Result{}, err
+		} else if res != nil {
+			return *res, nil
+		}
 		if res, err := r.ensureTenantReferencesConfig(ctx); err != nil {
 			return ctrl.Result{}, err
 		} else if res != nil {
 			return *res, nil
 		}
-		if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+		if err := r.ensureObservability(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -101,6 +127,59 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// ensureDefaultAITenantReferencesConfig links the automatically bootstrapped
+// default AITenant to Config/default. The bootstrap runnable may create the
+// AITenant shell before owner refs converge.
+func (r *LifecycleReconciler) ensureDefaultAITenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
+	if r.AITenantNamespace == "" {
+		return nil, nil
+	}
+	if r.Scheme == nil {
+		return nil, nil
+	}
+	log := ctrl.LoggerFrom(ctx)
+	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Config anchor not found when linking default AITenant; requeueing")
+			res := ctrl.Result{RequeueAfter: 2 * time.Second}
+			return &res, nil
+		}
+		return nil, err
+	}
+	if !cfg.DeletionTimestamp.IsZero() {
+		log.Info("Config anchor is terminating when linking default AITenant; requeueing")
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res, nil
+	}
+	if cfg.UID == "" {
+		res := ctrl.Result{RequeueAfter: 2 * time.Second}
+		return &res, nil
+	}
+
+	aitenantKey := client.ObjectKey{Name: tenantreconcile.DefaultAITenantName, Namespace: r.AITenantNamespace}
+	var aitenant maasv1alpha1.AITenant
+	if err := r.Get(ctx, aitenantKey, &aitenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if aitenantReferencesConfig(&aitenant, &cfg) {
+		return nil, nil
+	}
+	base := aitenant.DeepCopy()
+	if err := controllerutil.SetOwnerReference(&cfg, &aitenant, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set Config owner reference on default AITenant: %w", err)
+	}
+	if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
+		return nil, fmt.Errorf("patch default AITenant ownerReferences: %w", err)
+	}
+	log.Info("set Config owner reference on default AITenant", "namespace", r.AITenantNamespace)
+	return nil, nil
 }
 
 func (r *LifecycleReconciler) stripLegacyCleanupFinalizer(ctx context.Context, log logr.Logger, key types.NamespacedName) error {
@@ -216,8 +295,8 @@ func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Conte
 	return nil, nil
 }
 
-// ensureTenantReferencesConfig links default-tenant to Config/default via the same non-controller
-// ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the Tenant
+// ensureTenantReferencesConfig links MaasTenantConfig/default-tenant to Config/default via the same non-controller
+// ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the config
 // shell without owner refs; this reconciler converges them once Config has a UID.
 func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
 	if r.TenantSubscriptionNamespace == "" {
@@ -231,14 +310,14 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Tenant; requeueing")
+			log.Info("Config anchor not found when linking MaasTenantConfig; requeueing")
 			res := ctrl.Result{RequeueAfter: 2 * time.Second}
 			return &res, nil
 		}
 		return nil, err
 	}
 	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Tenant; requeueing")
+		log.Info("Config anchor is terminating when linking MaasTenantConfig; requeueing")
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return &res, nil
 	}
@@ -246,8 +325,8 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 		res := ctrl.Result{RequeueAfter: 2 * time.Second}
 		return &res, nil
 	}
-	tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
-	var tenant maasv1alpha1.Tenant
+	tKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: r.TenantSubscriptionNamespace}
+	var tenant maasv1alpha1.MaasTenantConfig
 	if err := r.Get(ctx, tKey, &tenant); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
@@ -259,16 +338,16 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	}
 	base := tenant.DeepCopy()
 	if err := controllerutil.SetOwnerReference(&cfg, &tenant, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on tenant: %w", err)
+		return nil, fmt.Errorf("set Config owner reference on MaasTenantConfig: %w", err)
 	}
 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch tenant ownerReferences: %w", err)
+		return nil, fmt.Errorf("patch MaasTenantConfig ownerReferences: %w", err)
 	}
-	log.Info("set Config owner reference on default-tenant", "namespace", r.TenantSubscriptionNamespace)
+	log.Info("set Config owner reference on MaasTenantConfig/default-tenant", "namespace", r.TenantSubscriptionNamespace)
 	return nil, nil
 }
 
-func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config) bool {
+func tenantReferencesConfig(tenant *maasv1alpha1.MaasTenantConfig, ct *maasv1alpha1.Config) bool {
 	for _, ref := range tenant.OwnerReferences {
 		if ref.UID == ct.UID &&
 			ref.Kind == maasv1alpha1.ConfigKind &&
@@ -279,9 +358,32 @@ func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config
 	return false
 }
 
+func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.Config) bool {
+	for _, ref := range aitenant.OwnerReferences {
+		if ref.UID == ct.UID &&
+			ref.Kind == maasv1alpha1.ConfigKind &&
+			ref.APIVersion == maasv1alpha1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+		return err
+	}
+	if err := r.ensureUsageDashboard(ctx, log); err != nil {
+		return err
+	}
+	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ensureLimitadorServiceMonitor creates or updates the Limitador ServiceMonitor in the operator namespace.
 // This ServiceMonitor ensures metrics are scraped from the Limitador pod and get to the DSC's monitoring stack.
-// TODO: move the ServiceMonitor to the monitoring namespace (opendatahub/redahat-ods-monitoring).
 // If the ServiceMonitor CRD is not available, this is a no-op (allows running without the monitoring stack).
 // TODO: need to set the overall status of MaaS to Degraded if COO is missing.
 func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context) error {
@@ -293,13 +395,18 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 		return err
 	}
 
+	scrapeInterval := cfg.Spec.LimitadorScrapeInterval
+	if scrapeInterval == "" {
+		scrapeInterval = "30s"
+	}
+
 	sm := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "monitoring.coreos.com/v1",
 			"kind":       "ServiceMonitor",
 			"metadata": map[string]any{
 				"name":      "limitador-metrics",
-				"namespace": r.DeploymentNS,
+				"namespace": r.MonitoringNamespace,
 				"labels": map[string]any{
 					"app":                              "limitador",
 					"monitoring.opendatahub.io/scrape": "true",
@@ -308,7 +415,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 			"spec": map[string]any{
 				"endpoints": []any{
 					map[string]any{
-						"interval": "30s",
+						"interval": scrapeInterval,
 						"path":     "/metrics",
 						"port":     "http",
 					},
@@ -340,6 +447,194 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 	return nil
 }
 
+// ensureUsageDashboard creates the usage dashboard in the monitoring namespace.
+// Uses the existing kustomize infrastructure to render manifests from ObservabilityManifestsPath.
+// If ObservabilityManifestsPath is not set or Perses CRDs are not installed, gracefully skips.
+func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr.Logger) error {
+	// Skip if observability manifests path not configured
+	if r.ObservabilityManifestsPath == "" {
+		log.Info("WARNING: Observability manifests path not configured; skipping observability dashboards")
+		return nil
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	// Render kustomization (reuses tenant reconciler's kustomize logic)
+	// TODO: move kustomize logic to a separate package and reuse it here.
+	resources, err := tenantreconcile.RenderKustomize(r.ObservabilityManifestsPath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render observability dashboards: %w", err)
+	}
+
+	// Apply each resource with Config as controller owner
+	for _, resource := range resources {
+		res := resource // avoid loop variable aliasing
+		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
+			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+
+		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
+				// installed by COO which may not be present yet). Skip so the rest of the
+				// platform manifests are applied and Tenant reconcile does not fail.
+				// The CRD watch will re-trigger reconcile once the CRDs appear.
+				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+					"name", res.GetName(), "namespace", res.GetNamespace())
+				continue
+			}
+			return fmt.Errorf("apply %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
+// ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
+// the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
+// usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
+func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.deleteEnvoyFilterIfExists(ctx, log)
+		}
+		return err
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		return r.deleteEnvoyFilterIfExists(ctx, log)
+	}
+
+	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg)
+}
+
+func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName(envoyFilterName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, ef); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
+	}
+	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
+	return nil
+}
+
+func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
+	manifestPath := r.EnvoyFilterManifestPath
+	if manifestPath == "" {
+		manifestPath = envoyFilterManifestPath
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
+			return nil
+		}
+		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
+	}
+
+	ef := &unstructured.Unstructured{}
+	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	_, _, err = dec.Decode(raw, nil, ef)
+	if err != nil {
+		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+	if err := patchClusterAddress(ef, collectorAddress); err != nil {
+		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+
+	ef.SetName(envoyFilterName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
+	}
+
+	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
+			return nil
+		}
+		return fmt.Errorf("apply usage-logs EnvoyFilter: %w", err)
+	}
+
+	log.V(1).Info("applied usage-logs EnvoyFilter", "namespace", r.GatewayNamespace, "collector", collectorAddress)
+	return nil
+}
+
+// patchClusterAddress sets the collector address in the CLUSTER configPatch
+// (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
+// Manual traversal is needed because unstructured.SetNestedField cannot handle
+// numeric slice indices — we must extract each []any level explicitly.
+func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return errors.New("configPatches[0] is not an object")
+	}
+
+	addrPath := []string{
+		"patch", "value", "load_assignment", "endpoints", "0",
+		"lb_endpoints", "0", "endpoint", "address", "socket_address", "address",
+	}
+
+	// unstructured.SetNestedField doesn't traverse numeric slice indices,
+	// so we walk manually to the socket_address map.
+	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
+	if err != nil || !found || len(endpoints) == 0 {
+		return fmt.Errorf("load_assignment.endpoints not found (path: %v): %w", addrPath, err)
+	}
+	ep0, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("endpoints[0] is not an object")
+	}
+	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	if err != nil || !found || len(lbEndpoints) == 0 {
+		return fmt.Errorf("lb_endpoints not found: %w", err)
+	}
+	lbe0, ok := lbEndpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("lb_endpoints[0] is not an object")
+	}
+
+	if err := unstructured.SetNestedField(lbe0, address,
+		"endpoint", "address", "socket_address", "address"); err != nil {
+		return fmt.Errorf("set socket_address.address: %w", err)
+	}
+
+	lbEndpoints[0] = lbe0
+	ep0["lb_endpoints"] = lbEndpoints
+	endpoints[0] = ep0
+	if err := unstructured.SetNestedSlice(patch, endpoints,
+		"patch", "value", "load_assignment", "endpoints"); err != nil {
+		return fmt.Errorf("write back endpoints: %w", err)
+	}
+	configPatches[0] = patch
+	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+}
+
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -352,7 +647,13 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if r.TenantSubscriptionNamespace == "" {
 			return false
 		}
-		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.TenantInstanceName
+		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.MaasTenantConfigInstanceName
+	})
+	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		if r.AITenantNamespace == "" {
+			return false
+		}
+		return o.GetNamespace() == r.AITenantNamespace && o.GetName() == tenantreconcile.DefaultAITenantName
 	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
@@ -367,7 +668,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(cfgSingleton),
 		).
 		Watches(
-			&maasv1alpha1.Tenant{},
+			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,
@@ -376,5 +677,41 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 			builder.WithPredicates(defaultTenant),
 		).
+		Watches(
+			&maasv1alpha1.AITenant{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(defaultAITenant),
+		).
+		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
+		// so that resources previously skipped due to missing CRDs are applied immediately.
+		Watches(
+			&extv1.CustomResourceDefinition{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(crdInOptionalAPIGroup()),
+		).
 		Complete(r)
+}
+
+// crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups
+// (e.g. perses.dev from COO). CRD names follow the pattern "<plural>.<group>", so a
+// suffix check is sufficient to identify the group without parsing the spec.
+func crdInOptionalAPIGroup() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		for group := range OptionalAPIGroups {
+			if strings.HasSuffix(o.GetName(), "."+group) {
+				return true
+			}
+		}
+		return false
+	})
 }

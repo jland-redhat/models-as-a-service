@@ -5,8 +5,8 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 **Installation flow:**
 
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
-2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
-3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable KServe and modelsAsService in your DataScienceCluster
+2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsAService)
+3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable modelsAsAService in your DataScienceCluster
 4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
 
@@ -54,17 +54,17 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
     ```
 
 !!! note "Restarting maas-api"
-    If you add or update the Secret after the DataScienceCluster already has modelsAsService in managed state, restart the maas-api deployment to pick up the config:
+    If you add or update the Secret after the DataScienceCluster already has modelsAsAService in managed state, restart the maas-api deployment to pick up the config:
 
     ```bash
     kubectl rollout restart deployment/maas-api -n opendatahub
     ```
 
-    This is not required when the Secret exists before enabling modelsAsService in your DataScienceCluster.
+    This is not required when the Secret exists before enabling modelsAsAService in your DataScienceCluster.
 
 ## Create Gateway
 
-Create `maas-default-gateway` in `openshift-ingress` **before** enabling `modelsAsService` in your DataScienceCluster.
+Create `maas-default-gateway` in `openshift-ingress` **before** enabling `aigateway.modelsAsAService` in your DataScienceCluster.
 
 `scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
 
@@ -112,7 +112,10 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Managed (Recommended)"
 
-    The operator deploys `maas-controller`, which self-bootstraps a `default-tenant` CR and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
+    The AI Gateway Operator deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service`; that AITenant creates or adopts `MaasTenantConfig/default-tenant` and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsAService` in Managed state:
+
+    !!! note "KServe not required for MaaS"
+        MaaS is now deployed as a sub-component of the **AI Gateway Operator** (`aigateway.modelsAsAService`), not KServe. You no longer need KServe enabled to use MaaS. Include KServe only if you need model serving capabilities independently.
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -122,10 +125,9 @@ After creating the database Secret and Gateways, create or update your DataScien
       name: default-dsc
     spec:
       components:
-        kserve:
+        aigateway:
           managementState: Managed
-          rawDeploymentServiceConfig: Headed
-          modelsAsService:
+          modelsAsAService:
             managementState: Managed
         dashboard:
           managementState: Managed
@@ -141,7 +143,7 @@ After creating the database Secret and Gateways, create or update your DataScien
         see [OdhDashboardConfig Feature Flags](#odhdashboardconfig-feature-flags) below.
 
     !!! note "Connectivity Link warning (ODH with Kuadrant)"
-        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
+        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
 
     **Validate DataScienceCluster:**
 
@@ -149,9 +151,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     # Check DataScienceCluster status
     kubectl get datasciencecluster default-dsc
 
-    # Wait for KServe and ModelsAsService to be ready (optional)
-    kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="KserveReady")].status}'=True \
-      datasciencecluster/default-dsc --timeout=300s
+    # Wait for MaaS to be ready (optional)
     kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="ModelControllerReady")].status}'=True \
       datasciencecluster/default-dsc --timeout=300s
 
@@ -160,7 +160,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     kubectl rollout status deployment/maas-api -n opendatahub --timeout=120s
     ```
 
-    The `maas-controller` (deployed by the operator) will automatically create a `default-tenant` CR and reconcile:
+    The `maas-controller` (deployed by the operator) will automatically create `AITenant/models-as-a-service`, which creates or adopts `MaasTenantConfig/default-tenant` and reconciles:
 
     - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
@@ -170,19 +170,15 @@ After creating the database Secret and Gateways, create or update your DataScien
     - **DestinationRule** (when TLS is enabled)
     - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
-    ### Tenant CR
+    ### MaasTenantConfig CR
 
-    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps a **namespace-scoped** `Tenant` object on startup. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
+    With `modelsAsAService` **Managed**, the ODH/RHOAI operator (via the `aigateway` component) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `MaasTenantConfig` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `MaasTenantConfig` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`maastenantconfig_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/maastenantconfig_types.go).
 
-    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`, and existing `Tenant/default-tenant.spec.apiKeys` and `spec.telemetry` settings are copied into `MaasTenantConfig/default-tenant` when those fields are unset. Going forward, set OIDC and Gateway on `AITenant`; set API key and telemetry settings on `MaasTenantConfig`.
 
     | Field | What to set |
     | ----- | ----------- |
-    | `spec.gatewayRef.namespace` | Namespace of your Gateway API `Gateway` (default `openshift-ingress`). |
-    | `spec.gatewayRef.name` | Name of that `Gateway` (default `maas-default-gateway`). Set these if your MaaS hostname is exposed through a different Gateway than the default. |
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
-    | `spec.externalOIDC.issuerUrl` | OIDC issuer URL for external identity provider (optional; enables OIDC on the maas-api AuthPolicy). |
-    | `spec.externalOIDC.clientId` | OIDC client ID (required when `issuerUrl` is set). |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
@@ -193,14 +189,11 @@ After creating the database Secret and Gateways, create or update your DataScien
 
     ```yaml
     apiVersion: maas.opendatahub.io/v1alpha1
-    kind: Tenant
+    kind: MaasTenantConfig
     metadata:
       name: default-tenant
       namespace: models-as-a-service
     spec:
-      gatewayRef:
-        namespace: openshift-ingress
-        name: maas-default-gateway
       apiKeys:
         maxExpirationDays: 90
       telemetry:
@@ -211,8 +204,8 @@ After creating the database Secret and Gateways, create or update your DataScien
     ```
 
     ```bash
-    kubectl apply -f tenant.yaml
-    kubectl get tenant default-tenant -n models-as-a-service -o yaml
+    kubectl apply -f maas-tenant-config.yaml
+    kubectl get maastenantconfig default-tenant -n models-as-a-service -o yaml
     ```
 
 === "Kustomize"
@@ -220,7 +213,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     !!! note "Development and early testing"
         Kustomize deployment can be used for **development and early testing purposes**. For production, use the Managed tab above.
 
-    Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS directly from the canonical build root:
+    Set `modelsAsAService` to **Removed** so the AI Gateway Operator does not deploy MaaS, then deploy MaaS directly from the canonical build root:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -230,10 +223,9 @@ After creating the database Secret and Gateways, create or update your DataScien
       name: default-dsc
     spec:
       components:
-        kserve:
+        aigateway:
           managementState: Managed
-          rawDeploymentServiceConfig: Headed
-          modelsAsService:
+          modelsAsAService:
             managementState: Removed
         dashboard:
           managementState: Managed
@@ -314,7 +306,7 @@ kubectl apply -f aitenant.yaml
 
 The controller will automatically create:
 - Tenant namespace: `ai-tenant-team-red`
-- Tenant CR: `default-tenant` in the tenant namespace
+- MaasTenantConfig CR: `default-tenant` in the tenant namespace
 - maas-api deployment: `maas-api-team-red`
 - HTTPRoute and AuthPolicy for the tenant
 
@@ -327,11 +319,24 @@ kubectl get aitenant team-red -n ai-tenants -o yaml
 # Check tenant namespace was created
 kubectl get namespace ai-tenant-team-red
 
-# Check Tenant CR
-kubectl get tenant default-tenant -n ai-tenant-team-red
+# Check MaasTenantConfig CR
+kubectl get maastenantconfig default-tenant -n ai-tenant-team-red
 ```
 
 For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
+
+### Delete a tenant
+
+Delete the `AITenant` resource to start tenant cleanup:
+
+!!! warning "Do not delete the default tenant"
+    Do not delete `AITenant/models-as-a-service` in `ai-tenants` unless you are intentionally tearing down MaaS. The controller bootstraps the default AITenant only once per `Config/default`; after deletion it is not automatically recreated. MaaS UI and API workflows that depend on the default tenant may stop working until the default tenant state is restored.
+
+```bash
+kubectl delete aitenant team-red -n ai-tenants
+```
+
+Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if namespace content or finalizers block deletion. The shared Gateway object and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
 
 ## Next steps
 

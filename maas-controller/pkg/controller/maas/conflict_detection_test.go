@@ -57,7 +57,7 @@ func TestDetectConflictingAuthPolicies_NoConflicts(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		authPolicyName = "maas-auth-" + modelName
 		maasPolicyName = "policy-a"
 	)
@@ -74,7 +74,7 @@ func TestDetectConflictingAuthPolicies_NoConflicts(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -103,7 +103,7 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 		rogueName      = "kserve-route-authn"
 	)
@@ -120,7 +120,7 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -152,7 +152,7 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -169,7 +169,7 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -204,7 +204,7 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -220,7 +220,7 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -248,7 +248,7 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 		modelNamespace = "model-ns"
 		policyNS       = "policy-ns"
 		otherNS        = "other-ns"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -264,7 +264,7 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: policyNS}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -290,7 +290,7 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 		rogueName      = "kserve-route-authn"
 	)
@@ -307,7 +307,7 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 
@@ -365,7 +365,7 @@ func TestDetectConflictingAuthPolicies_MissingModel(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -392,7 +392,7 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 	)
 
@@ -419,7 +419,7 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -446,18 +446,19 @@ func TestDetectConflictingAuthPolicies_Deduplication(t *testing.T) {
 	const (
 		namespace      = "default"
 		sharedRoute    = "shared-route"
+		httpRouteName  = "maas-" + sharedRoute
 		maasPolicyName = "policy-a"
 		rogueName      = "kserve-route-authn"
 	)
 
 	modelA := newMaaSModelRef("model-a", namespace, "ExternalModel", sharedRoute)
 	modelB := newMaaSModelRef("model-b", namespace, "ExternalModel", sharedRoute)
-	route := newHTTPRoute(sharedRoute, namespace)
+	route := newExternalModelHTTPRoute(sharedRoute, namespace)
 	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
 		maasv1alpha1.ModelRef{Name: "model-a", Namespace: namespace},
 		maasv1alpha1.ModelRef{Name: "model-b", Namespace: namespace},
 	)
-	rogueAP := newRogueAuthPolicy(rogueName, namespace, sharedRoute)
+	rogueAP := newRogueAuthPolicy(rogueName, namespace, httpRouteName)
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
@@ -466,7 +467,7 @@ func TestDetectConflictingAuthPolicies_Deduplication(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	log := ctrl.Log.WithName("test")
 
 	conflicts, err := r.detectConflictingAuthPolicies(context.Background(), log, maasPolicy)

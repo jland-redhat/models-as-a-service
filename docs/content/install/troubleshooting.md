@@ -52,7 +52,11 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
 
-7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
+7. **High-concurrency inference returns intermittent `500` or `503` errors**: The RHCL/Kuadrant WASM authentication path may be timing out under burst load.
+      - [ ] Confirm the errors occur during concurrent request scenarios and not for low-volume requests
+      - [ ] Increase `AUTH_SERVICE_TIMEOUT` from the default `200ms` to `2s` through the RHCL operator Subscription configuration. See [High-concurrency authentication timeout](platform-setup.md#high-concurrency-authentication-timeout).
+
+8. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
       - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
       - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
@@ -67,7 +71,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get servicemonitor,podmonitor -A | grep -E "(maas|kuadrant|limitador)"
       ```
 
-8. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
+9. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
       - [ ] Enable observability on Kuadrant CR:
 
       ```bash
@@ -81,7 +85,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get podmonitor -n kuadrant-system
       ```
 
-9. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
+10. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
 
       The error typically appears as `{"statusCode": 503, "code": "FST_REPLY_FROM_SERVICE_UNAVAILABLE", ...}`.
       This is a Fastify/Dashboard-level error (not a gateway 503) indicating the monitoring stack
@@ -90,13 +94,52 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
-10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
+11. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A conflicting OSSM subscription prevents the `openshift-ingress` operator from managing Gateway API on OCP versions where the ingress operator uses OLM for OSSM management (4.19, 4.20, 4.21 before 4.21.22). On OCP 4.21.22+, 4.22+, the ingress operator uses the Sail Library directly and manual OSSM subscriptions do not cause this conflict.
 
-12. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+      On affected versions, the `openshift-ingress` ClusterOperator manages OSSM 3 via OLM and
+      pins it to a version compatible with the cluster. Two scenarios cause this failure:
+
+      - An **OSSM v2.x** subscription (`servicemeshoperator`) blocks OSSM v3 installation —
+        v2 and v3 cannot coexist, and the ingress operator reports `GatewayAPIOSSMConflict`.
+      - A **manually installed OSSM v3** subscription (`servicemeshoperator3`, e.g. from the
+        stable channel via OperatorHub) pins a version the ingress operator cannot manage.
+
+      - [ ] Check for a conflicting OSSM subscription (v2 or v3):
+
+      ```bash
+      kubectl get subscription -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | grep -i servicemesh
+      ```
+
+      - [ ] Delete the conflicting subscription and its CSV (replace `<namespace>` and `<operator-name>` with the values from the previous step, e.g. `openshift-operators` and `servicemeshoperator3` or `servicemeshoperator`):
+
+      ```bash
+      kubectl delete subscription <operator-name> -n <namespace>
+      kubectl delete csv -n <namespace> -l operators.coreos.com/<operator-name>.<namespace>
+      ```
+
+      - [ ] Wait for the `openshift-ingress` operator to reinstall OSSM at the pinned version:
+
+      ```bash
+      kubectl wait --for=condition=Available clusteroperator/ingress --timeout=300s
+      ```
+
+      - [ ] Do **not** approve the OSSM upgrade InstallPlan that may appear in `openshift-operators` — approving it re-breaks the gateway
+
+      - [ ] Verify the GatewayClass is now accepted (`Accepted` must be `True`):
+
+      ```bash
+      kubectl get gatewayclass openshift-default -o jsonpath='{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Accepted")]}{.status}{"\t"}{.message}{end}{"\n"}'
+      ```
+
+      See [Install Gateway API Controller](platform-setup.md#install-gateway-api-controller) for the full warning and context.
+
+13. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+14. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
 
       MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
 
@@ -120,7 +163,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
-13. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+15. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
 
       - [ ] Check which namespace the controller is configured to accept:
 
@@ -134,7 +177,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get namespace ai-tenants
       ```
 
-      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.
+      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 14 above.
 
 ## Conflicting AuthPolicy Detection
 

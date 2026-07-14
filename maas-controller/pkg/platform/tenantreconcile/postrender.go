@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -14,9 +15,9 @@ import (
 // PostRender mutates rendered resources after kustomize build. It patches all
 // dynamic values (images, gateway config, namespace, audience, env vars) and
 // applies OIDC, telemetry, and managed-annotation customizations.
-func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
+func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
 
 	var filteredResources []unstructured.Unstructured
@@ -50,7 +51,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 			}
 		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
 			// Configure per-tenant HTTPRoute
-			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, tenant, params); err != nil {
+			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, params); err != nil {
 				return nil, err
 			}
 		}
@@ -58,13 +59,13 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		filteredResources = append(filteredResources, *resource)
 	}
 
-	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
+	if err := configureExternalOIDC(log, params); err != nil {
 		return nil, err
 	}
-	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, tenantID); err != nil {
+	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
-	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, tenantID); err != nil {
+	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
@@ -155,8 +156,8 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 	return nil
 }
 
-func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {
-	if tenant.Spec.ExternalOIDC == nil {
+func configureExternalOIDC(log logr.Logger, params PlatformParams) error {
+	if params.ExternalOIDC == nil {
 		return nil
 	}
 	// OIDC is configured in the singleton maas-gateway-auth AuthPolicy managed by
@@ -222,10 +223,12 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
 	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 ? ` +
+		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
-		`'["' + auth.identity.user.groups.join('","') + '"]'`
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
+		`'["system:authenticated"]')`
 	if err := unstructured.SetNestedField(resource.Object, map[string]any{
 		"expression": groupsExpr,
 	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain"); err != nil {
@@ -245,14 +248,16 @@ func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	return *t.Enabled
 }
 
-func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
-	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
+func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	telemetry := telemetryConfigFor(tenant)
+	if !isTelemetryEnabled(telemetry) {
 		return nil
 	}
 	// Caller should have checked CRD; still skip if API missing at apply time.
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
-	metricLabels := buildTelemetryLabels(log, tenant.Spec.Telemetry)
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
+	tenantID := params.TenantIdentifier
+	metricLabels := buildTelemetryLabels(log, telemetry)
 	tp := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "extensions.kuadrant.io/v1alpha1",
@@ -262,8 +267,8 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenant.Name,
-					LabelTenantNamespace:        tenant.Namespace,
+					LabelTenantName:             tenantTrackingName(tenant),
+					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -286,12 +291,13 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 	return nil
 }
 
-func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
-	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
+func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	if !isTelemetryEnabled(telemetryConfigFor(tenant)) {
 		return nil
 	}
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
+	tenantID := params.TenantIdentifier
 	istioTelemetry := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "telemetry.istio.io/v1",
@@ -301,8 +307,8 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenant.Name,
-					LabelTenantNamespace:        tenant.Namespace,
+					LabelTenantName:             tenantTrackingName(tenant),
+					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -376,12 +382,12 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 	return labels
 }
 
-func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, tenant *maasv1alpha1.Tenant, params PlatformParams) error {
+func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, params PlatformParams) error {
 	tenantID := params.TenantIdentifier
 
 	// Rename HTTPRoute for non-default tenants
 	if tenantID != "" {
-		newName := fmt.Sprintf("maas-api-%s-route", tenantID)
+		newName := MaaSAPIRouteName(tenantID)
 		log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
 		resource.SetName(newName)
 	}

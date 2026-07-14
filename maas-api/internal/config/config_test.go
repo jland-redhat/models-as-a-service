@@ -123,6 +123,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -134,6 +135,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -145,6 +147,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -155,6 +158,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -165,6 +169,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -175,6 +180,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -183,6 +189,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   0,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "must be at least 1",
 		},
@@ -192,6 +199,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   -1,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "must be at least 1",
 		},
@@ -204,6 +212,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               0,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},
@@ -216,6 +225,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               -1,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},
@@ -228,6 +238,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               65536,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},
@@ -270,15 +281,38 @@ func TestValidate(t *testing.T) {
 }
 
 func TestHandleDeprecatedFlags(t *testing.T) {
-	t.Run("deprecated port sets Address and clears Secure", func(t *testing.T) {
+	t.Run("deprecated port with Secure=true returns error", func(t *testing.T) {
 		cfg := &Config{
 			Secure:             true,
 			deprecatedHTTPPort: "9090",
 		}
-		cfg.handleDeprecatedFlags()
+		err := cfg.handleDeprecatedFlags()
 
-		if cfg.Secure {
-			t.Error("expected Secure to be false when deprecated port is used")
+		if err == nil {
+			t.Fatal("expected error when deprecated port is used with Secure=true")
+		}
+	})
+
+	t.Run("deprecated port with TLS configured returns error", func(t *testing.T) {
+		cfg := &Config{
+			deprecatedHTTPPort: "9090",
+			TLS:                TLSConfig{SelfSigned: true},
+		}
+		err := cfg.handleDeprecatedFlags()
+
+		if err == nil {
+			t.Fatal("expected error when deprecated port is used with TLS configuration")
+		}
+	})
+
+	t.Run("deprecated port without Secure or TLS sets Address", func(t *testing.T) {
+		cfg := &Config{
+			deprecatedHTTPPort: "9090",
+		}
+		err := cfg.handleDeprecatedFlags()
+
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if cfg.Address != ":9090" {
 			t.Errorf("expected Address ':9090', got %q", cfg.Address)
@@ -290,10 +324,23 @@ func TestHandleDeprecatedFlags(t *testing.T) {
 			Address:            ":7777",
 			deprecatedHTTPPort: "9090",
 		}
-		cfg.handleDeprecatedFlags()
+		err := cfg.handleDeprecatedFlags()
 
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if cfg.Address != ":7777" {
 			t.Errorf("expected Address ':7777' to be preserved, got %q", cfg.Address)
+		}
+	})
+
+	t.Run("deprecated port rejects malformed values", func(t *testing.T) {
+		for _, bad := range []string{":8080", "foo", "0", "65536", "-1"} {
+			cfg := &Config{deprecatedHTTPPort: bad}
+			err := cfg.handleDeprecatedFlags()
+			if err == nil {
+				t.Errorf("expected error for port %q, got nil", bad)
+			}
 		}
 	})
 
@@ -302,8 +349,11 @@ func TestHandleDeprecatedFlags(t *testing.T) {
 			Secure:  true,
 			Address: ":8443",
 		}
-		cfg.handleDeprecatedFlags()
+		err := cfg.handleDeprecatedFlags()
 
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if !cfg.Secure {
 			t.Error("expected Secure to remain true")
 		}

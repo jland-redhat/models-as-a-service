@@ -1,65 +1,122 @@
 """
-E2E tests for tenant-scoped authentication and API-key isolation (MT S4).
+E2E tests for tenant-scoped authentication and API-key isolation.
 
-This module requires two live tenant maas-api endpoints. Configure:
-  ENABLE_S4_E2E=true
-  MAAS_API_BASE_URL_TENANT_A / MAAS_API_BASE_URL_TENANT_B
-  TENANT_A_NAMESPACE / TENANT_B_NAMESPACE
-  TENANT_A_NAME / TENANT_B_NAME
+Covers [MT S7] acceptance criteria (RHOAIENG-62570):
+- No cross-tenant key leakage (tests 3.3, 3.5, 3.6)
+- Identity isolation (tests 3.1, 3.2, 3.4, 3.6)
+- Negative paths for cross-tenant access (tests 3.3, 3.6)
 
-The backing S4 implementation is not enabled in the default smoke run.
+These tests use shared_test_tenants fixture to create two AITenant instances
+and validate API key isolation between tenants.
 """
 
 import os
 import uuid
 
 import pytest
+import requests
 
 from multitenancy_helpers import (
-    apply_maas_auth_policy,
-    apply_maas_subscription,
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
-    env_bool,
     get_api_key_at,
     list_subscriptions_at,
+    make_tenant_model_accessible,
+    provision_tenant_model,
     redact_sensitive,
-    require_tenant_api_base_urls,
     response_summary,
     search_api_keys_at,
     select_subscription_at,
     validate_api_key_at,
-    wait_for_status_phase,
 )
-from test_helper import MODEL_NAMESPACE, MODEL_REF, _get_cluster_token
+from test_helper import _get_cluster_token, _delete_cr
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S4_E2E"),
-    reason="S4 tenant persistence E2E is gated; set ENABLE_S4_E2E=true once the backing implementation lands",
-)
+def _mint_oidc_token_for_tenant(tenant: str) -> str:
+    """Return a fresh OIDC access token for the given tenant ('a' or 'b').
+
+    Resolution order:
+    1. OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B — pre-minted static tokens
+       (backward-compat; note these expire in ~60s so may be stale by test time).
+    2. OIDC_TOKEN_URL (tenant a) / OIDC_TOKEN_URL_TENANT_B — mint a fresh token
+       via the Resource Owner Password Grant.
+
+    Returns an empty string if no token source is available so the caller can
+    skip the test gracefully.
+    """
+    static_key = f"OIDC_TOKEN_TENANT_{tenant.upper()}"
+    static = os.environ.get(static_key, "")
+    if static:
+        return static
+
+    if tenant == "a":
+        token_url = os.environ.get("OIDC_TOKEN_URL", "")
+        username = os.environ.get("OIDC_USERNAME", "alice_lead")
+        password = os.environ.get("OIDC_PASSWORD", "letmein")
+        client_id = os.environ.get("OIDC_CLIENT_ID", "test-client")
+    else:
+        token_url = os.environ.get("OIDC_TOKEN_URL_TENANT_B", "")
+        username = os.environ.get("OIDC_USERNAME_TENANT_B", "charlie_sec_lead")
+        password = os.environ.get("OIDC_PASSWORD_TENANT_B", "letmein")
+        client_id = os.environ.get("OIDC_CLIENT_ID_TENANT_B", "test-client")
+
+    if not token_url:
+        return ""
+
+    verify = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
+    try:
+        resp = requests.post(
+            token_url,
+            data={
+                "grant_type": "password",
+                "client_id": client_id,
+                "username": username,
+                "password": password,
+            },
+            timeout=30,
+            verify=verify,
+        )
+        resp.raise_for_status()
+        return resp.json().get("access_token", "")
+    except Exception:
+        return ""
+
+
+# Tenant auth isolation tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")
-def tenant_env():
-    urls = require_tenant_api_base_urls("TENANT_A", "TENANT_B")
+def tenant_env(shared_test_tenants):
+    """Adapter fixture with tenant-specific models."""
+    case_a, case_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
+
+    for case in (case_a, case_b):
+        model_name = f"auth-test-model-{case['suffix']}"
+        provision_tenant_model(model_name, case["tenant_ns"], case["gateway_name"])
+        case["model_name"] = model_name
+        case["model_namespace"] = case["tenant_ns"]
+
     tenant_a = {
-        "slot": "TENANT_A",
-        "name": os.environ.get("TENANT_A_NAME", "tenant-a"),
-        "namespace": os.environ.get("TENANT_A_NAMESPACE", ""),
-        "base_url": urls["TENANT_A"],
+        "name": case_a["tenant_label_name"],
+        "namespace": case_a["tenant_ns"],
+        "base_url": case_a["base_url"],
+        "model_name": case_a["model_name"],
+        "model_namespace": case_a["model_namespace"],
     }
     tenant_b = {
-        "slot": "TENANT_B",
-        "name": os.environ.get("TENANT_B_NAME", "tenant-b"),
-        "namespace": os.environ.get("TENANT_B_NAMESPACE", ""),
-        "base_url": urls["TENANT_B"],
+        "name": case_b["tenant_label_name"],
+        "namespace": case_b["tenant_ns"],
+        "base_url": case_b["base_url"],
+        "model_name": case_b["model_name"],
+        "model_namespace": case_b["model_namespace"],
     }
-    missing = [item["slot"] for item in (tenant_a, tenant_b) if not item["namespace"]]
-    if missing:
-        pytest.fail(f"tenant namespaces not configured; set {', '.join(f'{slot}_NAMESPACE' for slot in missing)}")
-    return tenant_a, tenant_b
+
+    yield tenant_a, tenant_b
+
+    for case in (case_a, case_b):
+        _delete_cr("maasmodelref", case["model_name"], case["tenant_ns"])
+        _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
 
 
 @pytest.fixture
@@ -70,10 +127,12 @@ def tenant_auth_setup(tenant_env):
     subscription_name = f"e2e-auth-iso-{suffix}"
     try:
         for tenant in tenant_env:
-            apply_maas_auth_policy(policy_name, tenant["namespace"])
-            apply_maas_subscription(subscription_name, tenant["namespace"])
-            wait_for_status_phase("maasauthpolicy", policy_name, tenant["namespace"], expected_phase="Active")
-            wait_for_status_phase("maassubscription", subscription_name, tenant["namespace"], expected_phase=("Active", "Degraded"))
+            make_tenant_model_accessible(
+                tenant["model_name"],
+                tenant["namespace"],
+                policy_name,
+                subscription_name,
+            )
         yield {
             "tenant_a": tenant_a,
             "tenant_b": tenant_b,
@@ -122,7 +181,6 @@ class TestTenantAuthIsolation:
 
     def test_api_key_validates_against_correct_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.2: API key validates on the tenant endpoint that minted it."""
-        # Use list subscriptions endpoint which accepts API key authentication
         response = list_subscriptions_at(
             tenant_auth_setup["tenant_a"]["base_url"],
             tenant_api_keys["a"]["key"],
@@ -130,13 +188,11 @@ class TestTenantAuthIsolation:
         assert response.status_code == 200, (
             f"Tenant A key should work on Tenant A gateway: {response_summary(response)}"
         )
-        # Verify the key works by checking we get a subscriptions array
         data = response.json()
         assert isinstance(data, list), redact_sensitive(data)
 
     def test_api_key_rejected_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.3: Tenant B rejects a key minted by Tenant A."""
-        # Try to use tenant A's key on tenant B's gateway - should be rejected
         response = list_subscriptions_at(
             tenant_auth_setup["tenant_b"]["base_url"],
             tenant_api_keys["a"]["key"],
@@ -147,10 +203,13 @@ class TestTenantAuthIsolation:
 
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""
-        token_a = os.environ.get("OIDC_TOKEN_TENANT_A", "")
-        token_b = os.environ.get("OIDC_TOKEN_TENANT_B", "")
+        token_a = _mint_oidc_token_for_tenant("a")
+        token_b = _mint_oidc_token_for_tenant("b")
         if not token_a or not token_b:
-            pytest.skip("OIDC_TOKEN_TENANT_A and OIDC_TOKEN_TENANT_B are required for per-tenant OIDC validation")
+            pytest.skip(
+                "Per-tenant OIDC tokens unavailable — set OIDC_TOKEN_URL (tenant-a) and "
+                "OIDC_TOKEN_URL_TENANT_B (tenant-b), or OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B"
+            )
 
         tenant_a, tenant_b = tenant_env
         response_a = search_api_keys_at(tenant_a["base_url"], token_a)
@@ -184,17 +243,49 @@ class TestTenantAuthIsolation:
         assert tenant_api_keys["b"]["id"] in ids_b
         assert tenant_api_keys["a"]["id"] not in ids_b
 
+    def test_api_key_metadata_not_leaked_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
+        """3.6: Tenant B cannot retrieve Tenant A's key metadata via GET /v1/api-keys/{id}."""
+        oc_token = _get_cluster_token()
+
+        # Try to GET tenant A's key from tenant B's gateway (should be rejected)
+        response = get_api_key_at(
+            tenant_auth_setup["tenant_b"]["base_url"],
+            oc_token,
+            tenant_api_keys["a"]["id"],
+        )
+        assert response.status_code == 404, (
+            f"Tenant B should not retrieve Tenant A's key metadata "
+            f"(expected 404, got {response.status_code}): {response_summary(response)}"
+        )
+
+        # Verify response body is exactly {"error": "API key not found"} with no leaked metadata
+        body = response.json()
+        assert body == {"error": "API key not found"}, (
+            f"404 response should contain only error message, got: {redact_sensitive(body)}"
+        )
+
+        # Verify tenant A can still GET its own key (sanity check)
+        response_a = get_api_key_at(
+            tenant_auth_setup["tenant_a"]["base_url"],
+            oc_token,
+            tenant_api_keys["a"]["id"],
+        )
+        assert response_a.status_code == 200, (
+            f"Tenant A should still retrieve its own key: {response_summary(response_a)}"
+        )
+
     def test_api_key_subscription_selection_uses_tenant_namespace(self, tenant_auth_setup, tenant_api_keys):
         """3.x/4.x: Internal subscription selection reports the tenant-local subscription namespace."""
+        tenant_a = tenant_auth_setup["tenant_a"]
         response = select_subscription_at(
-            tenant_auth_setup["tenant_a"]["base_url"],
+            tenant_a["base_url"],
             tenant_api_keys["a"]["key"],
             "e2e-auth-user",
             ["system:authenticated"],
             requested_subscription=tenant_auth_setup["subscription"],
-            requested_model=f"{MODEL_NAMESPACE}/{MODEL_REF}",
+            requested_model=f"{tenant_a['model_namespace']}/{tenant_a['model_name']}",
         )
         assert response.status_code == 200
         data = response.json()
         assert data.get("error") is None, redact_sensitive(data)
-        assert data.get("namespace") == tenant_auth_setup["tenant_a"]["namespace"]
+        assert data.get("namespace") == tenant_a["namespace"]

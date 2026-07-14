@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -22,6 +25,8 @@ const (
 	apiKeySubscriptionResolutionErrCode = "invalid_subscription"
 	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
 )
+
+var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
 
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
@@ -34,6 +39,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+	metrics      MetricsRecorder
+}
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordKeyValidation(tenant, result string)
+	RecordTokenMint(tenant, result string)
 }
 
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
@@ -43,7 +55,7 @@ func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
 	})
 }
 
-func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
+func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker, metrics MetricsRecorder) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -54,6 +66,7 @@ func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker)
 		service:      service,
 		logger:       log,
 		adminChecker: adminChecker,
+		metrics:      metrics,
 	}
 }
 
@@ -73,6 +86,15 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 	}
 
 	return user
+}
+
+// reqLogger returns the per-request logger enriched with tenant context,
+// falling back to the handler's base logger for internal routes.
+func (h *Handler) reqLogger(c *gin.Context) *logger.Logger {
+	if l := middleware.GetLogger(c); l != nil {
+		return l
+	}
+	return h.logger
 }
 
 // isAdmin checks if the user has admin privileges via SubjectAccessReview.
@@ -96,6 +118,12 @@ func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContex
 		return true, nil
 	}
 	return h.isAdmin(ctx, user)
+}
+
+func (h *Handler) recordTokenMint(tenant, result string) {
+	if h.metrics != nil {
+		h.metrics.RecordTokenMint(tenant, result)
+	}
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
@@ -134,8 +162,8 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	}
 	if !authorized {
 		h.logger.Warn("Unauthorized API key access attempt",
-			"requestingUser", user.Username,
-			"keyOwner", tok.Username,
+			"requestingUser", logger.RedactValue(user.Username),
+			"keyOwner", logger.RedactValue(tok.Username),
 			"keyId", tokenID,
 		)
 		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
@@ -185,6 +213,20 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	name := req.Name
 	if req.Ephemeral && name == "" {
 		name = fmt.Sprintf("ephemeral-%d", time.Now().UnixNano())
+	} else {
+		name = strings.TrimSpace(name)
+		if len(name) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot be whitespace only"})
+			return
+		}
+		if utf8.RuneCountInString(name) > 128 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot exceed 128 characters"})
+			return
+		}
+		if invalidKeyNameCharsPattern.MatchString(name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name contains invalid control characters"})
+			return
+		}
 	}
 
 	// Parse expiration duration if provided
@@ -212,14 +254,19 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		var notFound *subscription.SubscriptionNotFoundError
 		var accessDenied *subscription.AccessDeniedError
 		var noSub *subscription.NoSubscriptionError
+		var multipleSubs *subscription.MultipleSubscriptionsError
+		var modelNotInSub *subscription.ModelNotInSubscriptionError
 		var modelUnhealthy *subscription.ModelUnhealthyError
-		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) {
+		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) ||
+			errors.As(err, &multipleSubs) || errors.As(err, &modelNotInSub) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
@@ -227,8 +274,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			return
 		}
 		if errors.As(err, &modelUnhealthy) {
-			// Unreconciled (empty phase): 400 - temporary state, retry later
-			// Failed phase: 403 - authorization denied, subscription broken
+			h.recordTokenMint(user.Tenant, "rejected")
 			statusCode := http.StatusBadRequest
 			if modelUnhealthy.Phase == "Failed" {
 				statusCode = http.StatusForbidden
@@ -239,15 +285,17 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			})
 			return
 		}
+		h.recordTokenMint(user.Tenant, "failure")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
 		return
 	}
 
-	h.logger.Info("Created API key",
+	h.recordTokenMint(user.Tenant, "success")
+
+	h.reqLogger(c).Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
-		"username", user.Username,
-		"groups", user.Groups,
+		"username", logger.RedactValue(user.Username),
 		"ephemeral", req.Ephemeral,
 	)
 
@@ -272,9 +320,20 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 
 	result, err := h.service.ValidateAPIKey(c.Request.Context(), req.Key)
 	if err != nil {
+		if h.metrics != nil {
+			h.metrics.RecordKeyValidation(h.service.GetTenantName(), "error")
+		}
 		h.logger.Error("API key validation failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "validation failed"})
 		return
+	}
+
+	if h.metrics != nil {
+		validResult := "invalid"
+		if result.Valid {
+			validResult = "valid"
+		}
+		h.metrics.RecordKeyValidation(result.Tenant, validResult)
 	}
 
 	if !result.Valid {
@@ -324,8 +383,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	}
 	if !authorized {
 		h.logger.Warn("Unauthorized API key revocation attempt",
-			"requestingUser", user.Username,
-			"keyOwner", keyMetadata.Username,
+			"requestingUser", logger.RedactValue(user.Username),
+			"keyOwner", logger.RedactValue(keyMetadata.Username),
 			"keyId", keyID,
 		)
 		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
@@ -344,7 +403,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
+	h.reqLogger(c).Info("Revoked API key", "keyId", keyID, "revokedBy", logger.RedactValue(user.Username))
 
 	// Return the revoked key metadata (per OpenAPI spec)
 	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
@@ -471,7 +530,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to search API keys",
 			"error", err,
-			"username", targetUsername,
+			"username", logger.RedactValue(targetUsername),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search API keys"})
 		return
@@ -504,6 +563,31 @@ func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
 	})
 }
 
+// RevokeTenantAPIKeys handles DELETE /internal/v1/tenants/:tenant/api-keys.
+// Revokes all active API keys for this maas-api instance's tenant.
+func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
+	tenant := strings.TrimSpace(c.Param("tenant"))
+	count, err := h.service.RevokeTenantAPIKeys(c.Request.Context(), tenant)
+	if err != nil {
+		h.logger.Error("Failed to revoke tenant API keys", "error", err, "tenant", tenant)
+		switch {
+		case errors.Is(err, ErrTenantRequired):
+			c.JSON(http.StatusBadRequest, gin.H{"error": ErrTenantRequired.Error()})
+		case errors.Is(err, ErrTenantMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": ErrTenantMismatch.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke tenant API keys"})
+		}
+		return
+	}
+
+	h.logger.Info("Revoked tenant API keys", "tenant", tenant, "count", count)
+	c.JSON(http.StatusOK, TenantRevokeResponse{
+		RevokedCount: count,
+		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for tenant %s", count, tenant),
+	})
+}
+
 // BulkRevokeAPIKeys handles POST /v1/api-keys/bulk-revoke
 // Revokes all active API keys for a specific user.
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
@@ -528,8 +612,8 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		}
 		if !isAdmin {
 			h.logger.Warn("Unauthorized bulk revoke attempt",
-				"requestingUser", user.Username,
-				"targetUser", req.Username,
+				"requestingUser", logger.RedactValue(user.Username),
+				"targetUser", logger.RedactValue(req.Username),
 			)
 			c.JSON(http.StatusForbidden, gin.H{
 				"error": "Access denied: you can only bulk revoke your own API keys",
@@ -543,17 +627,17 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to bulk revoke API keys",
 			"error", err,
-			"targetUser", req.Username,
-			"requestingUser", user.Username,
+			"targetUser", logger.RedactValue(req.Username),
+			"requestingUser", logger.RedactValue(user.Username),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API keys"})
 		return
 	}
 
-	h.logger.Info("Bulk revoked API keys",
+	h.reqLogger(c).Info("Bulk revoked API keys",
 		"count", count,
-		"targetUser", req.Username,
-		"revokedBy", user.Username,
+		"targetUser", logger.RedactValue(req.Username),
+		"revokedBy", logger.RedactValue(user.Username),
 	)
 
 	response := BulkRevokeResponse{
