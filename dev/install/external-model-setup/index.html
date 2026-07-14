@@ -661,6 +661,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/upgrade-to-3.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -765,6 +793,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../concepts/multi-tenancy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenancy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../concepts/personas/" class="md-nav__link">
         
   
@@ -829,6 +885,34 @@
     
   
     Model Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/auth-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Modes
   
 
     
@@ -1566,6 +1650,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../multi-tenant-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../multi-tenant-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../troubleshooting/" class="md-nav__link">
         
   
@@ -1773,6 +1913,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../configuration-and-management/infra-namespace-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure Namespace Separation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
         
   
@@ -1781,6 +1949,34 @@
     
   
     Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/tenant-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant RBAC
   
 
     
@@ -2129,6 +2325,34 @@
     
   
     Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced-administration/external-oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External OIDC
   
 
     
@@ -3056,7 +3280,7 @@
   <span class="md-ellipsis">
     
   
-    Tenant
+    MaasTenantConfig
   
 
     
@@ -3444,7 +3668,7 @@
 <p>MaaS deploys the payload-processing component from the <a href="https://github.com/opendatahub-io/ai-gateway-payload-processing"><code>ai-gateway-payload-processing</code></a> repository. For detailed configuration and usage, see that project's documentation.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:</p>
+<p>If MaaS was deployed via the MaasTenantConfig CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>-l<span class="w"> </span><span class="nv">app</span><span class="o">=</span>payload-processing
 </code></pre></div>
 <p>If the pod is already running, skip to Step 2.</p>
@@ -3482,7 +3706,7 @@
 <ul>
 <li>Be in the same namespace as the ExternalModel</li>
 <li>Use the data key <code>api-key</code></li>
-<li>Have the label <code>inference.networking.k8s.io/bbr-managed=true</code> so IPP can read it</li>
+<li>Have the label <code>inference.llm-d.ai/ipp-managed=true</code> so IPP can read it</li>
 </ul>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nv">TMP_KEY_FILE</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span>mktemp<span class="k">)</span><span class="s2">&quot;</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>chmod<span class="w"> </span><span class="m">600</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span>
@@ -3493,7 +3717,7 @@
 <a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
 <a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>rm<span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">TMP_KEY_FILE</span><span class="si">}</span><span class="s2">&quot;</span>
 <a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>kubectl<span class="w"> </span>label<span class="w"> </span>secret<span class="w"> </span>openai-api-key<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>inference.networking.k8s.io/bbr-managed<span class="o">=</span><span class="nb">true</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>kubectl<span class="w"> </span>label<span class="w"> </span>secret<span class="w"> </span>openai-api-key<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>inference.llm-d.ai/ipp-managed<span class="o">=</span><span class="nb">true</span>
 </code></pre></div>
 <h2 id="step-4-create-the-externalmodel-and-maasmodelref">Step 4: Create the ExternalModel and MaaSModelRef</h2>
 <p>The ExternalModel defines the provider connection. The MaaSModelRef registers it in the MaaS catalog.</p>
@@ -3526,7 +3750,7 @@
 </code></pre></div>
 <p>Expected output:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>NAME     PHASE   ENDPOINT                                    HTTPROUTE   GATEWAY
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>gpt-4o   Ready   https://maas.&lt;cluster-domain&gt;/llm/gpt-4o   gpt-4o      maas-default-gateway
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>gpt-4o   Ready   https://maas.&lt;cluster-domain&gt;/llm/gpt-4o   maas-gpt-4o maas-default-gateway
 </code></pre></div>
 <h2 id="step-5-configure-access-and-rate-limits">Step 5: Configure Access and Rate Limits</h2>
 <p>Create a MaaSAuthPolicy (who can access) and MaaSSubscription (rate limits) in the <code>models-as-a-service</code> namespace:</p>
@@ -3747,7 +3971,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 9, 2026 23:24:10 UTC">June 9, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 10, 2026 21:37:28 UTC">July 10, 2026</span>
   </span>
 
     

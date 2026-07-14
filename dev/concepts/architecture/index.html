@@ -11,10 +11,10 @@
         <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/concepts/architecture/">
       
       
-        <link rel="prev" href="../../migration/upgrade-to-3.4/">
+        <link rel="prev" href="../../migration/upgrade-to-3.5/">
       
       
-        <link rel="next" href="../personas/">
+        <link rel="next" href="../multi-tenancy/">
       
       
         
@@ -661,6 +661,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/upgrade-to-3.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -811,6 +839,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#deployment-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#architecture" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -937,6 +976,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../multi-tenancy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenancy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../personas/" class="md-nav__link">
         
   
@@ -1001,6 +1068,34 @@
     
   
     Model Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../auth-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Modes
   
 
     
@@ -1450,6 +1545,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../install/multi-tenant-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/multi-tenant-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../install/troubleshooting/" class="md-nav__link">
         
   
@@ -1657,6 +1808,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../configuration-and-management/infra-namespace-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure Namespace Separation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
         
   
@@ -1665,6 +1844,34 @@
     
   
     Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/tenant-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant RBAC
   
 
     
@@ -2013,6 +2220,34 @@
     
   
     Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced-administration/external-oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External OIDC
   
 
     
@@ -2940,7 +3175,7 @@
   <span class="md-ellipsis">
     
   
-    Tenant
+    MaasTenantConfig
   
 
     
@@ -3000,6 +3235,17 @@
     <span class="md-ellipsis">
       
         Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment Architecture
       
     </span>
   </a>
@@ -3141,6 +3387,15 @@
 <h2 id="overview">Overview</h2>
 <p>The MaaS Platform is a Kubernetes-native layer for AI model serving built on <a href="https://gateway-api.sigs.k8s.io/">Gateway API</a> and policy controllers (<a href="https://docs.kuadrant.io/">Kuadrant</a>, <a href="https://docs.kuadrant.io/1.0.x/authorino/">Authorino</a>, <a href="https://docs.kuadrant.io/1.0.x/limitador/">Limitador</a>). It provides policy-based authentication and authorization, plus subscription-based rate limiting.</p>
 <p>Our future plans include improved request routing and discovery—and we're already sketching what comes after that.</p>
+<h2 id="deployment-architecture">Deployment Architecture</h2>
+<p>MaaS is deployed as a sub-component of the <strong>AI Gateway Operator</strong>, managed by the ODH/RHOAI operator. Enabling <code>aigateway.modelsAsAService: Managed</code> in your <code>DataScienceCluster</code> triggers the following component chain:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>DataScienceCluster
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  └── aigateway.modelsAsAService: Managed
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        └── AI Gateway Operator
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>              └── maas-controller
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                    └── maas-api, Tenant, MaaSAuthPolicy, MaaSSubscription, ...
+</code></pre></div>
+<p>This replaces the previous <code>kserve.modelsAsService</code> nesting. KServe is no longer a prerequisite for MaaS — include it only if you need independent model serving.</p>
 <h2 id="architecture">Architecture</h2>
 <h3 id="high-level-architecture">🏗️ High-Level Architecture</h3>
 <p>The MaaS Platform is a layer for <strong>authorization and rate limiting</strong> built on <a href="https://docs.kuadrant.io/">Kuadrant</a>. It sits in front of <strong>models</strong> you deploy on the cluster; the same pattern is expected to extend to models hosted outside the cluster over time.</p>
@@ -3228,7 +3483,7 @@
 <li>Only the hash and metadata (username, groups, name, <code>subscription</code> — the MaaSSubscription name bound at mint, <code>expiresAt</code>) are stored in PostgreSQL.</li>
 <li>The plaintext key is returned to the user <strong>only in this minting response</strong> (show-once), along with <code>expiresAt</code>; it is <strong>not</strong> exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.</li>
 </ol>
-<p>Every key expires. With <strong>operator-managed</strong> MaaS, the cluster operator sets the maximum lifetime on the <strong><code>Tenant</code></strong> CR: <strong><code>spec.apiKeys.maxExpirationDays</code></strong> (see <a href="../../install/maas-setup/#tenant-cr">Tenant CR</a>). <strong><code>maas-api</code></strong> applies that cap as <strong><code>API_KEY_MAX_EXPIRATION_DAYS</code></strong> (for example 90 days by default when defaults apply). Omit <strong><code>expiresIn</code></strong> on create to use that maximum, or set a shorter <strong><code>expiresIn</code></strong> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>) within the configured cap. The response always includes <strong><code>expiresAt</code></strong> (RFC3339).</p>
+<p>Every key expires. With <strong>operator-managed</strong> MaaS, the cluster operator sets the maximum lifetime on the <strong><code>MaasTenantConfig</code></strong> CR: <strong><code>spec.apiKeys.maxExpirationDays</code></strong> (see <a href="../../install/maas-setup/#maastenantconfig-cr">MaasTenantConfig CR</a>). <strong><code>maas-api</code></strong> applies that cap as <strong><code>API_KEY_MAX_EXPIRATION_DAYS</code></strong> (for example 90 days by default when defaults apply). Omit <strong><code>expiresIn</code></strong> on create to use that maximum, or set a shorter <strong><code>expiresIn</code></strong> (e.g., <code>30d</code>, <code>90d</code>, <code>1h</code>) within the configured cap. The response always includes <strong><code>expiresAt</code></strong> (RFC3339).</p>
 <pre class="mermaid"><code>graph TB
     subgraph UserLayer["User"]
         U[User]
@@ -3465,7 +3720,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="April 21, 2026 16:12:19 UTC">April 21, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 10, 2026 21:37:28 UTC">July 10, 2026</span>
   </span>
 
     

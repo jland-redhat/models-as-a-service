@@ -661,6 +661,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/upgrade-to-3.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -765,6 +793,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../concepts/multi-tenancy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenancy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../concepts/personas/" class="md-nav__link">
         
   
@@ -829,6 +885,34 @@
     
   
     Model Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/auth-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Modes
   
 
     
@@ -1278,6 +1362,62 @@
   
   
     <li class="md-nav__item">
+      <a href="../../install/multi-tenant-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../install/multi-tenant-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../install/troubleshooting/" class="md-nav__link">
         
   
@@ -1485,6 +1625,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../configuration-and-management/infra-namespace-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure Namespace Separation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../configuration-and-management/namespace-rbac/" class="md-nav__link">
         
   
@@ -1493,6 +1661,34 @@
     
   
     Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration-and-management/tenant-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant RBAC
   
 
     
@@ -1841,6 +2037,34 @@
     
   
     Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../advanced-administration/external-oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External OIDC
   
 
     
@@ -2309,6 +2533,17 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#namespace-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Namespace Architecture
+      
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#what-is-the-maas-controller" class="md-nav__link">
@@ -2948,7 +3183,7 @@
   <span class="md-ellipsis">
     
   
-    Tenant
+    MaasTenantConfig
   
 
     
@@ -3002,6 +3237,17 @@
       Table of contents
     </label>
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#namespace-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Namespace Architecture
+      
+    </span>
+  </a>
+  
+</li>
       
         <li class="md-nav__item">
   <a href="#what-is-the-maas-controller" class="md-nav__link">
@@ -3153,11 +3399,62 @@
 <h1 id="maas-controller-architecture">MaaS Controller Architecture</h1>
 <p>This document provides a technical deep-dive into the MaaS Controller architecture, internal components, and resource model.</p>
 <hr />
+<h2 id="namespace-architecture">Namespace Architecture</h2>
+<p>MaaS uses multiple namespaces to separate concerns and enable flexible deployment patterns:</p>
+<table>
+<thead>
+<tr>
+<th>Namespace</th>
+<th>Purpose</th>
+<th>Default Value</th>
+<th>Configurable</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Controller Namespace</strong></td>
+<td>Where maas-controller operator runs</td>
+<td><code>opendatahub</code> (ODH)<br/><code>redhat-ods-applications</code> (RHOAI)</td>
+<td>Set by operator/deployment</td>
+</tr>
+<tr>
+<td><strong>Infrastructure Namespace</strong></td>
+<td>Where maas-api deployment and maas-db-config secret run</td>
+<td>Same as controller (default)<br/><code>odh-ai-gateway-infra</code> (ODH separated)<br/><code>redhat-ai-gateway-infra</code> (RHOAI separated)</td>
+<td><code>--infra-namespace</code> flag</td>
+</tr>
+<tr>
+<td><strong>Default Tenant Namespace</strong></td>
+<td>Where default Tenant CR and subscriptions live</td>
+<td><code>models-as-a-service</code></td>
+<td><code>--maas-subscription-namespace</code> flag</td>
+</tr>
+<tr>
+<td><strong>AITenant Namespace</strong></td>
+<td>Where AITenant CRs are created</td>
+<td><code>ai-tenants</code></td>
+<td><code>--aitenant-namespace</code> flag</td>
+</tr>
+<tr>
+<td><strong>Gateway Namespace</strong></td>
+<td>Where Gateway API resources live</td>
+<td><code>openshift-ingress</code></td>
+<td><code>--gateway-namespace</code> flag</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Key points:</strong></p>
+<ul>
+<li><strong>PostgreSQL location is independent:</strong> The database can be external (AWS RDS, Azure Database, etc.) or in any namespace. Only the <code>maas-db-config</code> secret (containing the connection URL) needs to be in the infrastructure namespace.</li>
+<li><strong>Default behavior (no separation):</strong> Infrastructure namespace equals controller namespace. This works on all clusters including ODH on ROSA.</li>
+<li><strong>Namespace separation:</strong> When enabled, maas-api and related secrets deploy to a dedicated infrastructure namespace while the controller stays in its original namespace. See <a href="../../configuration-and-management/infra-namespace-migration/">Infrastructure Namespace Separation</a> for migration details.</li>
+</ul>
+<hr />
 <h2 id="what-is-the-maas-controller">What Is the MaaS Controller?</h2>
 <p>The <strong>MaaS Controller</strong> is a Kubernetes controller with two main responsibilities:</p>
 <ol>
 <li>
-<p><strong>Tenant reconciler</strong> — deploys and manages the MaaS platform workloads (<code>maas-api</code>, gateway policies, telemetry, DestinationRule) via the <strong><code>Tenant</code></strong> CR (<code>maas.opendatahub.io/v1alpha1</code>). On startup the controller self-bootstraps a <code>default-tenant</code> CR in the <code>models-as-a-service</code> namespace if one does not exist. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).</p>
+<p><strong>Tenant reconciler</strong> — deploys and manages the MaaS platform workloads (<code>maas-api</code>, gateway policies, telemetry, DestinationRule) via the <strong><code>MaasTenantConfig</code></strong> CR (<code>maas.opendatahub.io/v1alpha1</code>). On startup the controller self-bootstraps <code>AITenant/models-as-a-service</code> in the <code>ai-tenants</code> namespace; the AITenant reconciler creates or adopts <code>MaasTenantConfig/default-tenant</code> in the <code>models-as-a-service</code> namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).</p>
 </li>
 <li>
 <p><strong>Subscription reconcilers</strong> — let platform operators define:</p>
@@ -3173,7 +3470,8 @@
 <h2 id="high-level-architecture">High-Level Architecture</h2>
 <pre class="mermaid"><code>flowchart TB
     subgraph Platform["Platform lifecycle"]
-        Tenant["Tenant CR\n(default-tenant)"]
+        AITenant["AITenant CR\n(models-as-a-service)"]
+        Tenant["MaasTenantConfig CR\n(default-tenant)"]
     end
 
     subgraph Operator["Platform operator"]
@@ -3205,6 +3503,7 @@
         LLMIS["LLMInferenceService\n(KServe)"]
     end
 
+    AITenant --&gt; Tenant
     Tenant --&gt; TenantReconciler
     TenantReconciler --&gt; MaaSAPI
     TenantReconciler --&gt; GatewayPolicies
@@ -3221,7 +3520,7 @@
     HTTPRoute --&gt; AuthPolicy
     HTTPRoute --&gt; TokenRateLimitPolicy
     HTTPRoute --&gt; LLMIS</code></pre>
-<p><strong>Summary:</strong> The controller has two sides: the <strong>Tenant reconciler</strong> deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the <code>Tenant</code> CR; the <strong>subscription reconcilers</strong> turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).</p>
+<p><strong>Summary:</strong> The controller has two sides: the <strong>Tenant reconciler</strong> deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the <code>MaasTenantConfig</code> CR and AITenant platform context; the <strong>subscription reconcilers</strong> turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).</p>
 <hr />
 <h2 id="interaction-with-maas-api-discovery">Interaction with MaaS API (discovery)</h2>
 <p>The <strong>MaaS API</strong> is deployed as part of the <strong>Tenant</strong> platform bundle; it is not the same process as <strong>maas-controller</strong>, but the two work together: the controller <strong>reconciles</strong> <strong>MaaSModelRef</strong> and related CRs, and the API <strong>lists</strong> models from that cluster state for <strong>GET /v1/models</strong>.</p>
@@ -3375,7 +3674,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 6, 2026 15:15:25 UTC">May 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 10, 2026 21:37:28 UTC">July 10, 2026</span>
   </span>
 
     
