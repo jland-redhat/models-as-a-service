@@ -29,15 +29,14 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow ext_proc traffic from any Istio-managed gateway pod in the
-    # ingress namespace. Uses the common label applied by the Istio gateway
-    # controller to all provisioned gateway pods, covering both
-    # data-science-gateway and maas-default-gateway.
+    # Allow ext_proc traffic from gateway pods in openshift-ingress.
+    # NOTE: Do NOT add podSelector labels here. Kustomize labels transformers
+    # with includeSelectors=true (payload-processing/default) inject
+    # app.kubernetes.io/* labels into ingress podSelectors, which gateway pods
+    # do not carry and would block all ext_proc traffic. Same pattern as
+    # maas-api-allow-gateway NetworkPolicy.
     - from:
-        - podSelector:
-            matchLabels:
-              gateway.istio.io/managed: istio.io-gateway-controller
-          namespaceSelector:
+        - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
       ports:

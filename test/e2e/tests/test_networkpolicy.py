@@ -54,8 +54,8 @@ class TestPayloadProcessingNetworkPolicyExists:
                 f"podSelector must select payload-processing pods, got {pod_selector!r}"
             )
 
-    def test_ingress_uses_istio_managed_label(self):
-        """Ingress must use gateway.istio.io/managed to cover all gateways."""
+    def test_ingress_allows_gateway_namespace(self):
+        """ext_proc ingress must allow openshift-ingress without polluted pod labels."""
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
         ingress_rules = np["spec"].get("ingress") or []
@@ -75,15 +75,15 @@ class TestPayloadProcessingNetworkPolicyExists:
         from_selectors = ext_proc_rule.get("from") or []
         assert len(from_selectors) > 0, "ext_proc ingress rule must have 'from' selectors"
 
-        pod_selector = from_selectors[0].get("podSelector", {})
-        match_labels = pod_selector.get("matchLabels") or {}
-        assert match_labels.get(EXPECTED_MANAGED_LABEL) == EXPECTED_MANAGED_VALUE, (
-            f"ext_proc ingress must use {EXPECTED_MANAGED_LABEL}: {EXPECTED_MANAGED_VALUE} "
-            f"to cover all Istio-managed gateways, got matchLabels: {match_labels!r}"
+        ns_selector = from_selectors[0].get("namespaceSelector", {})
+        ns_labels = ns_selector.get("matchLabels") or {}
+        assert ns_labels.get("kubernetes.io/metadata.name") == GATEWAY_NAMESPACE, (
+            f"ext_proc ingress must allow traffic from {GATEWAY_NAMESPACE}, "
+            f"got namespaceSelector: {ns_selector!r}"
         )
 
-    def test_ingress_does_not_hardcode_single_gateway(self):
-        """Ingress must NOT use gateway-name label that restricts to one gateway."""
+    def test_ingress_pod_selector_not_polluted_by_kustomize(self):
+        """Ingress podSelector must not carry maas-api/payload-processing labels."""
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
         ingress_rules = np["spec"].get("ingress") or []
@@ -94,6 +94,16 @@ class TestPayloadProcessingNetworkPolicyExists:
                 continue
             for from_selector in rule.get("from") or []:
                 pod_labels = (from_selector.get("podSelector") or {}).get("matchLabels") or {}
+                assert "app.kubernetes.io/name" not in pod_labels, (
+                    "ext_proc ingress podSelector must not include app.kubernetes.io/name "
+                    "(kustomize includeSelectors pollution blocks gateway pods). "
+                    f"Found: {pod_labels!r}"
+                )
+                assert "app.kubernetes.io/component" not in pod_labels, (
+                    "ext_proc ingress podSelector must not include app.kubernetes.io/component "
+                    "(kustomize includeSelectors pollution blocks gateway pods). "
+                    f"Found: {pod_labels!r}"
+                )
                 assert "gateway.networking.k8s.io/gateway-name" not in pod_labels, (
                     "ext_proc ingress must NOT use gateway.networking.k8s.io/gateway-name "
                     "as pod selector — this restricts traffic to a single gateway. "
