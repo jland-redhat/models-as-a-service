@@ -30,6 +30,7 @@ from test_helper import (
     DISTINCT_MODEL_2_REF,
     DISTINCT_MODEL_ID,
     DISTINCT_MODEL_REF,
+    GATEWAY_NAMESPACE,
     MODEL_CANONICAL_ID,
     MODEL_NAME,
     MODEL_NAMESPACE,
@@ -43,6 +44,8 @@ from test_helper import (
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
+    _create_llmis,
+    _create_maas_model_ref,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -169,7 +172,7 @@ class TestModelsEndpoint:
         → Same modelRef listed twice deduplicates to 1 entry (same URL)
 
     13. test_different_modelrefs_same_model_id
-        → Free + unconfigured (same served ID, different URLs) → 2 entries
+        → Two ephemeral modelRefs (same served ID, different URLs) → 2 entries
 
     14. test_multiple_distinct_models_in_subscription
         → Different modelRefs with different IDs returns 2 entries (no duplicates)
@@ -723,19 +726,13 @@ class TestModelsEndpoint:
         """
         Test 7: Different modelRefs serving same model ID return separate entries.
 
-        Uses two DIFFERENT MaaSModelRefs (each listed ONCE) that both serve the
-        SAME model ID:
-        - MODEL_REF (facebook-opt-125m-simulated) → serves "facebook/opt-125m"
-        - UNCONFIGURED_MODEL_REF (e2e-unconfigured-...) → serves "facebook/opt-125m"
-
-        (Premium uses a distinct served ID; unconfigured reuses the free simulator
-        served ID so this case stays covered without patching samples.)
+        Creates two ephemeral LLMInferenceServices / MaaSModelRefs that both serve
+        the same unique ID (test/e2e-same-model-id). Fixture models intentionally
+        use distinct served IDs, so this case is covered with short-lived CRs.
 
         The API deduplicates by (model ID, URL). Since these are different backend
         services with different URLs, they return as 2 separate entries even though
         they serve the same model ID.
-
-        Each entry shows the same model ID but different URL and subscription.
         """
         log.info("Test 7: Different modelRefs same ID should deduplicate (INTENDED behavior)")
 
@@ -744,15 +741,29 @@ class TestModelsEndpoint:
         maas_ns = _ns()
         subscription_name = "e2e-diff-refs-subscription"
         auth_policy_name = "e2e-diff-refs-auth"
+        suffix = uuid.uuid4().hex[:8]
+        shared_served_id = "test/e2e-same-model-id"
+        expected_canonical_id = f"publishers/{MODEL_NAMESPACE}/models/{shared_served_id}"
+        model_ref_a = f"e2e-same-id-a-{suffix}"
+        model_ref_b = f"e2e-same-id-b-{suffix}"
         api_key = None
 
         try:
-            # Create SA
+            # Create two backends that advertise the same served model ID
+            for ref in (model_ref_a, model_ref_b):
+                _create_llmis(
+                    ref,
+                    MODEL_NAMESPACE,
+                    "maas-default-gateway",
+                    GATEWAY_NAMESPACE,
+                    model_name=shared_served_id,
+                )
+                _create_maas_model_ref(ref, MODEL_NAMESPACE, ref)
+
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
-            # Create auth policy with both modelRefs
-            log.info(f"Creating auth policy with {MODEL_REF} and {UNCONFIGURED_MODEL_REF}")
+            log.info(f"Creating auth policy with {model_ref_a} and {model_ref_b}")
             auth_policy_cr = {
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
@@ -762,8 +773,8 @@ class TestModelsEndpoint:
                 },
                 "spec": {
                     "modelRefs": [
-                        {"name": MODEL_REF, "namespace": MODEL_NAMESPACE},
-                        {"name": UNCONFIGURED_MODEL_REF, "namespace": MODEL_NAMESPACE},
+                        {"name": model_ref_a, "namespace": MODEL_NAMESPACE},
+                        {"name": model_ref_b, "namespace": MODEL_NAMESPACE},
                     ],
                     "subjects": {
                         "users": [sa_user],
@@ -778,8 +789,7 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Create subscription with both modelRefs (each listed ONCE)
-            log.info(f"Creating subscription with {MODEL_REF} and {UNCONFIGURED_MODEL_REF}")
+            log.info(f"Creating subscription with {model_ref_a} and {model_ref_b}")
             subscription_cr = {
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
@@ -794,12 +804,12 @@ class TestModelsEndpoint:
                     },
                     "modelRefs": [
                         {
-                            "name": MODEL_REF,
+                            "name": model_ref_a,
                             "namespace": MODEL_NAMESPACE,
                             "tokenRateLimits": [{"limit": 100, "window": "1m"}],
                         },
                         {
-                            "name": UNCONFIGURED_MODEL_REF,
+                            "name": model_ref_b,
                             "namespace": MODEL_NAMESPACE,
                             "tokenRateLimits": [{"limit": 200, "window": "1m"}],
                         },
@@ -813,8 +823,6 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Wait for auth and subscription reconciliation before creating API key.
-            # Both modelRefs must be governed before /v1/models probes each backend.
             _wait_for_maas_auth_policy_phase(
                 auth_policy_name,
                 namespace=maas_ns,
@@ -823,19 +831,16 @@ class TestModelsEndpoint:
             _wait_for_maas_subscription_phase(
                 subscription_name,
                 namespace=maas_ns,
-                timeout=120,
+                timeout=180,
                 require_model_statuses=True,
             )
-            _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE)
-            _wait_for_model_ready(UNCONFIGURED_MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(model_ref_a, namespace=MODEL_NAMESPACE, timeout=180)
+            _wait_for_model_ready(model_ref_b, namespace=MODEL_NAMESPACE, timeout=180)
 
-            # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-diff-refs-test-key", subscription=subscription_name)
 
             _wait_reconcile()
 
-            # Query /v1/models. Gateway policy propagation and backend model probes can
-            # lag behind CR readiness, so wait until both modelRefs appear.
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
             request_headers = {
                 "Authorization": f"Bearer {api_key}",
@@ -851,7 +856,7 @@ class TestModelsEndpoint:
                     models = r.json().get("data") or []
                     assert isinstance(models, list), "Models should be a list"
                     model_ids = [m["id"] for m in models]
-                    urls = [m.get("url") for m in models if m.get("id") == MODEL_CANONICAL_ID and m.get("url")]
+                    urls = [m.get("url") for m in models if m.get("id") == expected_canonical_id and m.get("url")]
                     if len(models) == 2 and len(set(urls)) == 2:
                         break
                     log.info(
@@ -867,34 +872,26 @@ class TestModelsEndpoint:
 
             assert isinstance(models, list), "Models should be a list"
 
-            # Get model IDs from response
             unique_ids = set(model_ids)
 
             log.info(f"📊 API Response: {len(models)} total model(s), {len(unique_ids)} unique ID(s)")
             log.info(f"   Model IDs: {model_ids}")
             log.info(f"   Unique IDs: {unique_ids}")
-            log.info("   Subscription had: 2 different modelRefs both serving 'facebook/opt-125m'")
+            log.info(f"   Subscription had: 2 different modelRefs both serving '{shared_served_id}'")
 
-            # Both modelRefs serve the same model ID
             assert len(unique_ids) == 1, \
-                f"Expected only 1 unique model ID (both modelRefs serve {MODEL_CANONICAL_ID}), got {len(unique_ids)}: {unique_ids}"
+                f"Expected only 1 unique model ID (both modelRefs serve {expected_canonical_id}), got {len(unique_ids)}: {unique_ids}"
 
-            # Verify it's the expected canonical BBR model ID
-            expected_id = MODEL_CANONICAL_ID
-            assert expected_id in unique_ids, \
-                f"Expected to find '{expected_id}', but got {unique_ids}"
+            assert expected_canonical_id in unique_ids, \
+                f"Expected to find '{expected_canonical_id}', but got {unique_ids}"
 
-            # INTENDED BEHAVIOR: Should return 2 entries (deduplication by model ID + URL)
-            # Different backend services (different URLs) return separate entries even with same model ID
             assert len(models) == 2, \
                 f"Expected 2 entries (different URLs), got {len(models)}: {json.dumps(models, indent=2)}"
 
-            # Validate both entries have different URLs
             urls = [m["url"] for m in models if "url" in m]
             assert len(urls) == 2, f"Expected 2 URLs, got {len(urls)}"
             assert urls[0] != urls[1], f"Expected different URLs, got duplicates: {urls}"
 
-            # Validate each entry has subscriptions field with the same subscription
             for model in models:
                 assert "subscriptions" in model, "Model should have 'subscriptions' field"
                 assert isinstance(model["subscriptions"], list), "subscriptions should be a list"
@@ -906,9 +903,11 @@ class TestModelsEndpoint:
             log.info("✅ API correctly returned 2 separate entries (different URLs) for same model ID")
 
         finally:
-            # Cleanup
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
+            for ref in (model_ref_a, model_ref_b):
+                _delete_cr("maasmodelref", ref, namespace=MODEL_NAMESPACE)
+                _delete_cr("llminferenceservice", ref, namespace=MODEL_NAMESPACE)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 

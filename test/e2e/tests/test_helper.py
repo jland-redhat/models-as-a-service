@@ -33,6 +33,7 @@ Environment variables (all optional unless noted):
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
   - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
   - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_UNCONFIGURED_MODEL_NAME: Unconfigured served model name (default: test/e2e-unconfigured-model)
   - E2E_DISTINCT_MODEL_REF: First distinct model ref (default: e2e-distinct-simulated)
   - E2E_DISTINCT_MODEL_ID: Canonical BBR model ID for first distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model)
   - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref (default: e2e-distinct-2-simulated)
@@ -111,6 +112,7 @@ PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPT
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
+UNCONFIGURED_MODEL_NAME = os.environ.get("E2E_UNCONFIGURED_MODEL_NAME", "test/e2e-unconfigured-model")
 DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simulated")
 # Canonical BBR form: publishers/{namespace}/models/{spec.model.name}
 DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
@@ -627,7 +629,12 @@ def _inference(api_key, path=None, extra_headers=None, model_name=None, max_toke
     """POST completions using an API key only (subscription is bound at mint)."""
     path = path or MODEL_PATH
     if model_name is None:
-        model_name = PREMIUM_MODEL_NAME if path == PREMIUM_MODEL_PATH else MODEL_NAME
+        if path == PREMIUM_MODEL_PATH:
+            model_name = PREMIUM_MODEL_NAME
+        elif path == UNCONFIGURED_MODEL_PATH:
+            model_name = UNCONFIGURED_MODEL_NAME
+        else:
+            model_name = MODEL_NAME
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if extra_headers:
@@ -1105,7 +1112,13 @@ def _scale_kuadrant_controller_up(namespace="kuadrant-system", timeout=60):
 # Multi-tenant model helpers
 # ---------------------------------------------------------------------------
 
-def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespace: str = "openshift-ingress"):
+def _create_llmis(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = "openshift-ingress",
+    model_name: str = "facebook/opt-125m",
+):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
     Args:
@@ -1113,6 +1126,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
         namespace: Namespace to create LLMIS in
         gateway_name: Gateway name to route through
         gateway_namespace: Gateway namespace (default: openshift-ingress)
+        model_name: Served model ID (spec.model.name and simulator --model)
     """
     _apply_cr({
         "apiVersion": "serving.kserve.io/v1alpha1",
@@ -1123,7 +1137,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
         },
         "spec": {
             "model": {
-                "name": "facebook/opt-125m",
+                "name": model_name,
                 # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
                 "uri": "hf://placeholder/no-model",
             },
@@ -1151,7 +1165,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
-                            "--model", "facebook/opt-125m",
+                            "--model", model_name,
                             "--mode", "random",
                             "--no-mm-encoder-only",
                             "--ssl-certfile", "/var/run/kserve/tls/tls.crt",
