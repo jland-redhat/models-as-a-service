@@ -1241,6 +1241,7 @@ func TestSelector_ResolvedModelFromPublisherAlias(t *testing.T) {
 	)
 
 	t.Run("publisher ID resolves to MaaSModelRef identity", func(t *testing.T) {
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 		result, err := selector.Select([]string{"g1"}, "", "", publisherID)
 		if err != nil {
 			t.Fatalf("Select: %v", err)
@@ -1251,6 +1252,7 @@ func TestSelector_ResolvedModelFromPublisherAlias(t *testing.T) {
 	})
 
 	t.Run("path-style identity is returned unchanged", func(t *testing.T) {
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 		result, err := selector.Select([]string{"g1"}, "", "", canonicalRef)
 		if err != nil {
 			t.Fatalf("Select: %v", err)
