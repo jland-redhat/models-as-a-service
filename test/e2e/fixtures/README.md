@@ -5,8 +5,8 @@ This directory contains kustomizations for end-to-end testing that combine publi
 ## Contents
 
 ### Public Samples (from `docs/samples/maas-system/`)
-- **free**: `system:authenticated` group, 100 tokens/min
-- **premium**: `premium-user` group, 1000 tokens/min
+- **free**: `system:authenticated` group, 100 tokens/min (served ID `facebook/opt-125m`)
+- **premium**: `premium-user` group, 1000 tokens/min (served ID `facebook/opt-125m-premium`)
 
 ### Test-Only Fixtures
 - **unconfigured**: Model with no MaaSAuthPolicy or MaaSSubscription (validates that gateway denies access with 403)

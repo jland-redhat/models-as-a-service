@@ -34,7 +34,6 @@ from test_helper import (
     MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_REF,
-    PREMIUM_MODEL_REF,
     PREMIUM_SIMULATOR_SUBSCRIPTION,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
@@ -170,7 +169,7 @@ class TestModelsEndpoint:
         → Same modelRef listed twice deduplicates to 1 entry (same URL)
 
     13. test_different_modelrefs_same_model_id
-        → Different modelRefs (different URLs) return 2 separate entries
+        → Free + unconfigured (same served ID, different URLs) → 2 entries
 
     14. test_multiple_distinct_models_in_subscription
         → Different modelRefs with different IDs returns 2 entries (no duplicates)
@@ -727,7 +726,10 @@ class TestModelsEndpoint:
         Uses two DIFFERENT MaaSModelRefs (each listed ONCE) that both serve the
         SAME model ID:
         - MODEL_REF (facebook-opt-125m-simulated) → serves "facebook/opt-125m"
-        - PREMIUM_MODEL_REF (premium-simulated-simulated-premium) → serves "facebook/opt-125m"
+        - UNCONFIGURED_MODEL_REF (e2e-unconfigured-...) → serves "facebook/opt-125m"
+
+        (Premium uses a distinct served ID; unconfigured reuses the free simulator
+        served ID so this case stays covered without patching samples.)
 
         The API deduplicates by (model ID, URL). Since these are different backend
         services with different URLs, they return as 2 separate entries even though
@@ -750,7 +752,7 @@ class TestModelsEndpoint:
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
             # Create auth policy with both modelRefs
-            log.info(f"Creating auth policy with {MODEL_REF} and {PREMIUM_MODEL_REF}")
+            log.info(f"Creating auth policy with {MODEL_REF} and {UNCONFIGURED_MODEL_REF}")
             auth_policy_cr = {
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSAuthPolicy",
@@ -761,7 +763,7 @@ class TestModelsEndpoint:
                 "spec": {
                     "modelRefs": [
                         {"name": MODEL_REF, "namespace": MODEL_NAMESPACE},
-                        {"name": PREMIUM_MODEL_REF, "namespace": MODEL_NAMESPACE},
+                        {"name": UNCONFIGURED_MODEL_REF, "namespace": MODEL_NAMESPACE},
                     ],
                     "subjects": {
                         "users": [sa_user],
@@ -777,7 +779,7 @@ class TestModelsEndpoint:
             )
 
             # Create subscription with both modelRefs (each listed ONCE)
-            log.info(f"Creating subscription with {MODEL_REF} and {PREMIUM_MODEL_REF}")
+            log.info(f"Creating subscription with {MODEL_REF} and {UNCONFIGURED_MODEL_REF}")
             subscription_cr = {
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
                 "kind": "MaaSSubscription",
@@ -797,7 +799,7 @@ class TestModelsEndpoint:
                             "tokenRateLimits": [{"limit": 100, "window": "1m"}],
                         },
                         {
-                            "name": PREMIUM_MODEL_REF,
+                            "name": UNCONFIGURED_MODEL_REF,
                             "namespace": MODEL_NAMESPACE,
                             "tokenRateLimits": [{"limit": 200, "window": "1m"}],
                         },
@@ -825,7 +827,7 @@ class TestModelsEndpoint:
                 require_model_statuses=True,
             )
             _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE)
-            _wait_for_model_ready(PREMIUM_MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(UNCONFIGURED_MODEL_REF, namespace=MODEL_NAMESPACE)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-diff-refs-test-key", subscription=subscription_name)

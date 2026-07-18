@@ -27,6 +27,8 @@ Environment variables (all optional unless noted):
   - E2E_MODEL_NAMESPACE: Namespace where models live (default: llm)
   - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
   - E2E_PREMIUM_MODEL_REF: Premium model ref (default: premium-simulated-simulated-premium)
+  - E2E_PREMIUM_MODEL_NAME: Premium served model name (default: facebook/opt-125m-premium)
+  - E2E_PREMIUM_MODEL_PATH: Gateway path for premium model (default: /llm/premium-simulated-simulated-premium)
   - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium subscription (default: premium-simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
   - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
@@ -99,6 +101,12 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
+PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
+PREMIUM_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_PREMIUM_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{PREMIUM_MODEL_NAME}",
+)
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
@@ -618,13 +626,15 @@ def _create_test_subscription(
 def _inference(api_key, path=None, extra_headers=None, model_name=None, max_tokens=3):
     """POST completions using an API key only (subscription is bound at mint)."""
     path = path or MODEL_PATH
+    if model_name is None:
+        model_name = PREMIUM_MODEL_NAME if path == PREMIUM_MODEL_PATH else MODEL_NAME
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
-        json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": max_tokens},
+        json={"model": model_name, "prompt": "Hello", "max_tokens": max_tokens},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
 
