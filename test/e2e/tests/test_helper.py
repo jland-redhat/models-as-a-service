@@ -706,6 +706,28 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
 
 
 # ---------------------------------------------------------------------------
+# IPP (Payload Processing) Helpers
+# ---------------------------------------------------------------------------
+
+def _check_ipp_pods_deployed():
+    """Check if payload-processing (IPP) pods are deployed in the gateway namespace."""
+    for name in ("payload-pre-processing", "payload-processing"):
+        result = subprocess.run(
+            ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
+             "-o", "jsonpath={.status.readyReplicas}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log.debug("oc check for %s failed: %s", name, result.stderr.strip())
+            return False
+        ready = result.stdout.strip()
+        if not ready or ready == "0":
+            log.debug("Deployment %s has no ready replicas", name)
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Wait / Polling Helpers
 # ---------------------------------------------------------------------------
 

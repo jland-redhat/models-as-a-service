@@ -2,11 +2,13 @@
 E2E tests for external model (egress) support.
 
 Tests that MaaS can route requests to an external endpoint via ExternalModel CRD,
-including reconciler resource creation, auth enforcement, and egress connectivity.
+including reconciler resource creation, auth enforcement, egress connectivity,
+path-based routing, and body-based routing (BBR).
 
 Prerequisites:
 - MaaS deployed with ExternalModel reconciler
 - External endpoint accessible from the cluster (default: httpbin.org)
+- For body-based routing tests: IPP (payload-processing) pods deployed
 
 Environment variables:
 - E2E_EXTERNAL_ENDPOINT: External endpoint hostname (default: httpbin.org)
@@ -27,6 +29,7 @@ from test_helper import (
     MODEL_NAMESPACE,
     TLS_VERIFY,
     _apply_cr,
+    _check_ipp_pods_deployed,
     _delete_cr,
     _get_cr,
     _wait_for_maas_auth_policy_phase,
@@ -42,6 +45,8 @@ SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
+
+TARGET_MODEL = "gpt-3.5-turbo"
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 EXTERNAL_MODEL_RESOURCE_NAME = f"maas-{EXTERNAL_MODEL_NAME}"
@@ -117,7 +122,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
         "spec": {
             "provider": "openai",
-            "targetModel": "gpt-3.5-turbo",
+            "targetModel": TARGET_MODEL,
             "endpoint": EXTERNAL_ENDPOINT,
             "credentialRef": {
                 "name": f"{EXTERNAL_MODEL_NAME}-api-key",
@@ -305,7 +310,7 @@ class TestExternalModelCleanup:
             "metadata": {"name": temp_name, "namespace": MODEL_NAMESPACE},
             "spec": {
                 "provider": "openai",
-                "targetModel": "gpt-3.5-turbo",
+                "targetModel": TARGET_MODEL,
                 "endpoint": EXTERNAL_ENDPOINT,
                 "credentialRef": {
                     "name": f"{EXTERNAL_MODEL_NAME}-api-key",
@@ -332,3 +337,85 @@ class TestExternalModelCleanup:
         finally:
             # Always clean up to avoid resource leaks
             _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
+
+
+
+class TestExternalModelPathRouting:
+    """Verify path-based routing for external model endpoints.
+
+    The URL path ``/{namespace}/{model}/v1/...`` determines which model
+    backend the gateway routes to. The happy-path case (correct path reaches
+    the endpoint) is already covered by TestExternalModelEgress.
+    """
+
+    def test_wrong_path_returns_not_found(self, external_models_setup):
+        """Request to non-existent model path returns 404 or auth error."""
+        setup = external_models_setup
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/nonexistent-model-xyz/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {"model": "nonexistent-model-xyz", "messages": [{"role": "user", "content": "hello"}]}
+
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code in (401, 403, 404), (
+            f"Expected 401/403/404 for wrong model path, got {r.status_code}. "
+            f"Request should not route to any model backend."
+        )
+        log.info("Path routing (wrong path): HTTP %d", r.status_code)
+
+
+
+requires_ipp = pytest.mark.skipif(
+    not _check_ipp_pods_deployed(),
+    reason="Payload-processing (IPP) pods not deployed; body routing tests require IPP",
+)
+
+
+@requires_ipp
+class TestExternalModelBodyRouting:
+    """Verify body-based routing for external models.
+
+    IPP pre-processing extracts the ``model`` field from the JSON body and
+    sets the ``X-Gateway-Model-Name`` header. These tests prove the body
+    model field drives routing: a correct model succeeds while a wrong
+    model is rejected by the model-provider-resolver plugin.
+    """
+
+    def _post_chat(self, gateway_url, model_path, api_key, body):
+        url = f"{gateway_url}{model_path}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+    def test_wrong_model_in_body_rejected(self, external_models_setup):
+        """Wrong model name in body is rejected by IPP model-provider-resolver."""
+        setup = external_models_setup
+        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
+
+        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
+            "model": "nonexistent-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code != 200, (
+            f"Expected rejection for wrong model in body, got 200. "
+            f"Body routing may not be active — request succeeded via path routing alone."
+        )
+        log.info("Body routing (wrong model): HTTP %d", r.status_code)
+
+    def test_missing_model_in_body_rejected(self, external_models_setup):
+        """Missing model field in body is rejected by IPP."""
+        setup = external_models_setup
+        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
+
+        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code != 200, (
+            f"Expected rejection for missing model in body, got 200. "
+            f"Body routing may not be active — request succeeded without model field."
+        )
+        log.info("Body routing (missing model): HTTP %d", r.status_code)
