@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -64,4 +65,76 @@ func TestSyncMaaSParametersConfigMap_UpdatesValue(t *testing.T) {
 	var updated corev1.ConfigMap
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: maasParametersConfigMapName, Namespace: "test-ns"}, &updated))
 	assert.Equal(t, "365", updated.Data["api-key-max-expiration-days"])
+}
+
+func payloadProcessingEnvoyFilter(ns, gatewayName string, priority *int64) *unstructured.Unstructured {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(GVKEnvoyFilter)
+	ef.SetNamespace(ns)
+	ef.SetName(PayloadProcessingName)
+	spec := map[string]any{
+		"targetRefs": []any{
+			map[string]any{
+				"group": "gateway.networking.k8s.io",
+				"kind":  "Gateway",
+				"name":  gatewayName,
+			},
+		},
+	}
+	if priority != nil {
+		spec["priority"] = *priority
+	}
+	ef.Object["spec"] = spec
+	return ef
+}
+
+func TestPayloadProcessingEnvoyFilterReady(t *testing.T) {
+	const (
+		gwNS   = "openshift-ingress"
+		gwName = "maas-default-gateway"
+	)
+	prioOK := PayloadProcessingEnvoyFilterPriority
+	prioLow := int64(0)
+
+	t.Run("missing EnvoyFilter", func(t *testing.T) {
+		c := fake.NewClientBuilder().Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		require.NoError(t, err)
+		assert.False(t, ready)
+		assert.Contains(t, detail, "not found")
+		assert.Contains(t, detail, "404 NR")
+	})
+
+	t.Run("missing priority", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, nil)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		require.NoError(t, err)
+		assert.False(t, ready)
+		assert.Contains(t, detail, "priority=missing")
+		assert.Contains(t, detail, "404 NR")
+	})
+
+	t.Run("priority too low", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, &prioLow)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		require.NoError(t, err)
+		assert.False(t, ready)
+		assert.Contains(t, detail, "priority=0")
+	})
+
+	t.Run("wrong gateway targetRef", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, "other-gw", &prioOK)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		require.NoError(t, err)
+		assert.False(t, ready)
+		assert.Contains(t, detail, "targetRefs[0].name")
+	})
+
+	t.Run("ready", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, &prioOK)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		require.NoError(t, err)
+		assert.True(t, ready)
+		assert.Empty(t, detail)
+	})
 }

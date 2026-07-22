@@ -441,6 +441,12 @@ func grpcClusterName(service, namespace string, port int) string {
 func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 
+	// Ensure we patch after Kuadrant's wasm INSERT (priority 0). Without this,
+	// RHCL subFilter matches on envoy.filters.http.wasm never fire.
+	if err := unstructured.SetNestedField(r.Object, PayloadProcessingEnvoyFilterPriority, "spec", "priority"); err != nil {
+		return fmt.Errorf("write EnvoyFilter priority: %w", err)
+	}
+
 	targetRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter targetRefs: %w", err)

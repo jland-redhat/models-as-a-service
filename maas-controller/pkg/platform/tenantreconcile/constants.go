@@ -78,6 +78,9 @@ const (
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+	// PayloadProcessingEnvoyFilterPriority runs after Kuadrant's default-priority (0)
+	// EnvoyFilter so RHCL's envoy.filters.http.wasm anchor exists when we INSERT_*.
+	PayloadProcessingEnvoyFilterPriority int64 = 10
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName = "maas-controller"
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential

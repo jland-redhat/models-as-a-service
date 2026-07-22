@@ -347,7 +347,10 @@ class TestTenantBodyRouting:
         })
         assert r.status_code == 200, (
             f"Expected 200 with correct model in body, got {r.status_code}. "
-            f"Response: {redact_sensitive(r.text[:500])}"
+            f"Response: {redact_sensitive(r.text[:500])}. "
+            "If this is 404 NR / route_not_found, payload-pre-processing ext_proc is likely "
+            "missing from the gateway filter chain — check EnvoyFilter/payload-processing "
+            "spec.priority (>=10) and run ./scripts/check-payload-ext-proc-filters.sh"
         )
         data = r.json()
         assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"

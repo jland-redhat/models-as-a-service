@@ -150,6 +150,50 @@ class TestTenantLifecycle:
             )
         assert result.stdout.strip(), "payload-processing deployment get succeeded but returned no name"
 
+    def test_payload_processing_envoyfilter_priority(self):
+        """EnvoyFilter must have priority >= 10 so RHCL wasm anchors apply after Kuadrant.
+
+        Without this, HTTP_FILTER inserts silently no-op and body-routed /v1/* returns 404 NR.
+        """
+        st = _wait_tenant_ready()
+        assert st is not None, "MaasTenantConfig not Ready; skip EnvoyFilter checks."
+        if st.get("phase") != "Active":
+            pytest.skip("Tenant not Active; payload-processing EnvoyFilter not asserted")
+
+        result = _oc_run(
+            [
+                "get",
+                "envoyfilter",
+                "payload-processing",
+                "-n",
+                GATEWAY_NAMESPACE,
+                "-o",
+                "jsonpath={.spec.priority}",
+            ]
+        )
+        if result.returncode != 0:
+            if _oc_output_not_found(result):
+                pytest.skip(
+                    f"EnvoyFilter payload-processing not found in {GATEWAY_NAMESPACE!r}; "
+                    "skipping (optional workload in some CI or partial installs)."
+                )
+            combined = (result.stderr or "") + (result.stdout or "")
+            pytest.fail(
+                f"`oc get envoyfilter payload-processing -n {GATEWAY_NAMESPACE}` failed: "
+                f"{combined.strip()}"
+            )
+        priority_raw = (result.stdout or "").strip()
+        assert priority_raw, (
+            "EnvoyFilter payload-processing has empty spec.priority; need >= 10 so "
+            "ext_proc inserts apply after Kuadrant wasm (else body-routed /v1/* → 404 NR). "
+            "Run: ./scripts/check-payload-ext-proc-filters.sh"
+        )
+        priority = int(priority_raw)
+        assert priority >= 10, (
+            f"EnvoyFilter payload-processing spec.priority={priority}; need >= 10. "
+            "Run: ./scripts/check-payload-ext-proc-filters.sh"
+        )
+
 
 class TestTenantContract:
     def test_status_has_phase_and_conditions(self):
