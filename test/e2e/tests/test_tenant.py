@@ -150,6 +150,42 @@ class TestTenantLifecycle:
             )
         assert result.stdout.strip(), "payload-processing deployment get succeeded but returned no name"
 
+    def test_payload_processing_envoyfilter_per_gateway(self):
+        """Each gateway should have its own payload-processing-<gateway> EnvoyFilter."""
+        st = _wait_tenant_ready()
+        assert st is not None, "MaasTenantConfig not Ready; skip EnvoyFilter checks."
+        if st.get("phase") != "Active":
+            pytest.skip("Tenant not Active; payload-processing EnvoyFilter not asserted")
+
+        gateway_name = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
+        ef_name = f"payload-processing-{gateway_name}"
+        result = _oc_run(
+            [
+                "get",
+                "envoyfilter",
+                ef_name,
+                "-n",
+                GATEWAY_NAMESPACE,
+                "-o",
+                "jsonpath={.spec.targetRefs[0].name}",
+            ]
+        )
+        if result.returncode != 0:
+            if _oc_output_not_found(result):
+                pytest.skip(
+                    f"EnvoyFilter {ef_name} not found in {GATEWAY_NAMESPACE!r}; "
+                    "skipping (optional workload in some CI or partial installs)."
+                )
+            combined = (result.stderr or "") + (result.stdout or "")
+            pytest.fail(
+                f"`oc get envoyfilter {ef_name} -n {GATEWAY_NAMESPACE}` failed: "
+                f"{combined.strip()}"
+            )
+        assert result.stdout.strip() == gateway_name, (
+            f"EnvoyFilter {ef_name} should target Gateway/{gateway_name}, "
+            f"got {result.stdout.strip()!r}"
+        )
+
 
 class TestTenantContract:
     def test_status_has_phase_and_conditions(self):

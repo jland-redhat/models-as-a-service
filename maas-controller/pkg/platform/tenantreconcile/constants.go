@@ -5,8 +5,11 @@
 package tenantreconcile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"reflect"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -73,11 +76,17 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 
-	// Non-tenant-specific resource names (shared infrastructure)
+	// Non-tenant-specific resource names (shared infrastructure).
+	// IPP Deployments/Services stay shared; the EnvoyFilter is renamed per Gateway
+	// (see PayloadProcessingEnvoyFilterName) so each AITenant gateway gets its own
+	// filter copy pointing at the same shared IPP pods.
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+	// PayloadProcessingEnvoyFilterPriority runs after Kuadrant's default-priority (0)
+	// EnvoyFilter so RHCL's envoy.filters.http.wasm anchor exists when we INSERT_*.
+	PayloadProcessingEnvoyFilterPriority int64 = 10
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName = "maas-controller"
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
@@ -137,6 +146,42 @@ func resourceNameForTenant(baseName, tenantID string) string {
 		return baseName
 	}
 	return baseName + "-" + tenantID
+}
+
+// payloadProcessingEnvoyFilterNameMaxLen is under the Kubernetes 63-char DNS1123
+// label limit so truncated names still leave headroom for trailing hyphen cleanup.
+const payloadProcessingEnvoyFilterNameMaxLen = 60
+
+// PayloadProcessingEnvoyFilterName returns the per-Gateway EnvoyFilter name.
+// IPP Deployments remain shared as PayloadProcessingName; only the EnvoyFilter is
+// duplicated so every AITenant gateway gets ext_proc without last-writer-wins on
+// a singleton targetRefs.
+//
+// Long gateway names are truncated to payloadProcessingEnvoyFilterNameMaxLen with an
+// 8-char content hash suffix so names stay unique and DNS1123-safe instead of failing.
+func PayloadProcessingEnvoyFilterName(gatewayName string) string {
+	prefix := PayloadProcessingName + "-"
+	name := prefix + gatewayName
+	if len(name) <= payloadProcessingEnvoyFilterNameMaxLen {
+		return name
+	}
+
+	sum := sha256.Sum256([]byte(gatewayName))
+	hash := hex.EncodeToString(sum[:])[:8]
+	// prefix + trimmed + "-" + hash
+	budget := payloadProcessingEnvoyFilterNameMaxLen - len(prefix) - 1 - len(hash)
+	if budget < 1 {
+		fallback := prefix + hash
+		if len(fallback) > payloadProcessingEnvoyFilterNameMaxLen {
+			fallback = fallback[:payloadProcessingEnvoyFilterNameMaxLen]
+		}
+		return strings.TrimRight(fallback, "-")
+	}
+	trimmed := strings.TrimRight(gatewayName[:budget], "-.")
+	if trimmed == "" {
+		trimmed = hash
+	}
+	return prefix + trimmed + "-" + hash
 }
 
 func GatewayDefaultAuthPolicyName(tenantID string) string {

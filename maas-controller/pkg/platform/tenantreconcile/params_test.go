@@ -165,8 +165,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	payloadPluginsConfigMap := requireResource(t, resources, GVKConfigMap, PayloadProcessingPluginsConfigMapName)
 	assert.Equal(t, params.GatewayNamespace, payloadPluginsConfigMap.GetNamespace())
 
-	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingName)
+	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(params.GatewayName))
 	assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
+	priority, found, err := unstructured.NestedInt64(payloadEnvoyFilter.Object, "spec", "priority")
+	require.NoError(t, err)
+	require.True(t, found, "EnvoyFilter spec.priority must be set so RHCL wasm anchors apply after Kuadrant")
+	assert.Equal(t, PayloadProcessingEnvoyFilterPriority, priority)
 	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
 	require.NoError(t, err)
 	require.True(t, found)

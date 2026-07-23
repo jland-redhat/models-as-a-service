@@ -441,6 +441,19 @@ func grpcClusterName(service, namespace string, port int) string {
 func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 
+	// One EnvoyFilter copy per Gateway (shared IPP Deployments/Services unchanged).
+	// Name is truncated (with hash) when needed — see PayloadProcessingEnvoyFilterName.
+	efName := PayloadProcessingEnvoyFilterName(params.GatewayName)
+	r.SetName(efName)
+	log.V(4).Info("Patching payload-processing EnvoyFilter for gateway",
+		"envoyFilter", efName, "gateway", params.GatewayName, "namespace", params.GatewayNamespace)
+
+	// Ensure patches run after Kuadrant's wasm INSERT (priority 0). Without this,
+	// RHCL subFilter matches on envoy.filters.http.wasm never fire.
+	if err := unstructured.SetNestedField(r.Object, PayloadProcessingEnvoyFilterPriority, "spec", "priority"); err != nil {
+		return fmt.Errorf("write EnvoyFilter priority: %w", err)
+	}
+
 	targetRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
@@ -459,6 +472,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	}
 
 	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	// Clusters stay on the shared IPP Services (not renamed per gateway).
 	beforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
 	afterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
 

@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -88,6 +89,12 @@ func RunPlatform(
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
+	}
+
+	// Best-effort: remove the pre-multitenancy singleton EnvoyFilter/payload-processing
+	// so it does not double-attach ext_proc once per-gateway copies exist.
+	if err := deleteLegacySingletonPayloadEnvoyFilter(ctx, c, log, params.GatewayNamespace); err != nil {
+		log.V(1).Info("legacy payload-processing EnvoyFilter cleanup deferred", "error", err)
 	}
 
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
@@ -209,4 +216,25 @@ func MaasAPIDeploymentReady(ctx context.Context, c client.Client, appNamespace, 
 		return false, fmt.Sprintf("available replicas %d/%d", dep.Status.AvailableReplicas, desired), nil
 	}
 	return true, "", nil
+}
+
+// deleteLegacySingletonPayloadEnvoyFilter removes EnvoyFilter/payload-processing when
+// present. Per-gateway copies are named payload-processing-<gateway>; leaving the old
+// singleton would double-insert ext_proc on whatever Gateway it still targeted.
+func deleteLegacySingletonPayloadEnvoyFilter(ctx context.Context, c client.Client, log logr.Logger, gatewayNamespace string) error {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(GVKEnvoyFilter)
+	key := types.NamespacedName{Namespace: gatewayNamespace, Name: PayloadProcessingName}
+	if err := c.Get(ctx, key, ef); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	log.Info("deleting legacy singleton payload-processing EnvoyFilter (replaced by per-gateway copies)",
+		"namespace", gatewayNamespace, "name", PayloadProcessingName)
+	if err := c.Delete(ctx, ef); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }
