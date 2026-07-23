@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -246,7 +247,7 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 	if !found || priority < PayloadProcessingEnvoyFilterPriority {
 		shown := "missing"
 		if found {
-			shown = fmt.Sprintf("%d", priority)
+			shown = strconv.FormatInt(priority, 10)
 		}
 		return false, fmt.Sprintf(
 			"EnvoyFilter %s/%s spec.priority=%s; need >= %d so HTTP_FILTER inserts apply after Kuadrant wasm (otherwise body-routed /v1/* returns 404 NR)",
