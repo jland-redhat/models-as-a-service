@@ -52,6 +52,7 @@ from test_helper import (
     _inference,
     _maas_api_url,
     _poll_status,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
 )
@@ -80,6 +81,9 @@ class TestHeaderSpoofing:
         The request should succeed (200) using the real key-derived identity,
         proving the spoofed headers had no effect on authorization.
         """
+        # Earlier tests may have rewritten maas-gateway-auth; minting a key
+        # against an unenforced gateway yields empty 403 flakes.
+        _wait_for_gateway_auth_enforced(timeout=120)
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         spoofed_headers = {
