@@ -117,8 +117,19 @@ kind: AITenant
 metadata:
   name: ${TENANT_NAME}
   namespace: ai-tenants
+spec:
+  gateway:
+    name: ${TENANT_NAME}
+  # Optional: configure an external OIDC provider for this tenant.
+  # Each tenant can use a different IdP realm/client. Omit to rely on OpenShift TokenReview only.
+  # oidc:
+  #   issuerUrl: "https://keycloak.example.com/realms/${TENANT_NAME}"
+  #   clientId: ${TENANT_NAME}-maas
+  #   ttl: 300
 EOF
 ```
+
+For OIDC configuration details, per-tenant isolation, and verification steps, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
 The controller bootstraps the following resources:
 
@@ -297,6 +308,11 @@ The controller finalizer cleans up:
     ```bash
     ./scripts/delete-ai-tenant.sh red-team
     ```
+
+## Known Limitations
+
+!!! danger "External models are not supported in multi-tenant deployments"
+    The ExternalModel reconciler is not tenant-aware — it hardcodes HTTPRoutes to the default tenant's gateway. When multiple tenants are running, each tenant's IPP stack conflicts with these routes, breaking external models for all tenants including the default. See [External Model Setup — Multi-Tenant Limitation](external-model-setup.md#multi-tenant-limitation) for details.
 
 ## See Also
 
