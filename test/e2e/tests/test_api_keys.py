@@ -77,7 +77,7 @@ def _warm_gateway(api_keys_base_url: str, headers: dict):
     maas-gateway-auth reconciling; empty 403s follow until Enforced=True and
     Envoy loads the config.
     """
-    _wait_for_gateway_auth_enforced(timeout=120)
+    _wait_for_gateway_auth_enforced()
     r = _request_with_gateway_retry(
         requests.post,
         api_keys_base_url,
@@ -1530,13 +1530,13 @@ class TestAPIKeySubscriptionFilter:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             # Deleting MaaSAuthPolicies rewrites maas-gateway-auth; wait until
             # Kuadrant reports Enforced again before the next test hits maas-api.
-            _wait_for_gateway_auth_enforced(timeout=120)
+            _wait_for_gateway_auth_enforced()
 
     def test_search_without_subscription_returns_all(self, api_keys_base_url: str, headers: dict):
         """Search without subscription filter returns keys across all subscriptions."""
         # Prior tests may have just mutated MaaSAuthPolicies; ensure gateway auth
         # is Enforced before minting keys (avoids empty 403 flakes).
-        _wait_for_gateway_auth_enforced(timeout=120)
+        _wait_for_gateway_auth_enforced()
         key_ids = []
         try:
             # Create keys with explicit subscription binding
