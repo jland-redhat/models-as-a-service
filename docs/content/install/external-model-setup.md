@@ -45,6 +45,33 @@ IPP is required for external models — it injects the provider API key and tran
 
 MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
 
+### IPP response translation (opt-in)
+
+By default, the `api-translation` plugin runs on the **request** path only. Response-side `api-translation` is off so SSE streaming for internal and OpenAI-compatible models is not held by a response processor.
+
+Providers that rewrite responses (notably Anthropic Messages ↔ OpenAI) need response translation enabled manually on the plugins ConfigMap. After MaaS creates `payload-processing-plugins`, the controller stamps `opendatahub.io/managed: "false"` and then leaves the ConfigMap alone so your edits stick.
+
+```bash
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+
+# 1. Edit the live ConfigMap — under profiles[0].plugins.response add:
+#      - pluginRef: api-translation
+kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
+
+# 2. Reload IPP
+kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
+```
+
+To reset the ConfigMap to product defaults once, remove the opt-out annotation (or set `opendatahub.io/managed=true` for continuous reconciler management), wait for reconcile, then optionally set `opendatahub.io/managed=false` again after editing:
+
+```bash
+# One-shot reset to defaults (controller re-applies, then stamps managed=false again)
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
+
+# Or keep the reconciler owning the ConfigMap continuously:
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed=true --overwrite
+```
+
 !!! note
     If MaaS was deployed via the MaasTenantConfig CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
 
