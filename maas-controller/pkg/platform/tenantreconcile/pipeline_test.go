@@ -67,11 +67,11 @@ func TestSyncMaaSParametersConfigMap_UpdatesValue(t *testing.T) {
 	assert.Equal(t, "365", updated.Data["api-key-max-expiration-days"])
 }
 
-func payloadProcessingEnvoyFilter(ns, gatewayName string, priority *int64) *unstructured.Unstructured {
+func payloadProcessingEnvoyFilter(ns, efName, gatewayName string, priority *int64) *unstructured.Unstructured {
 	ef := &unstructured.Unstructured{}
 	ef.SetGroupVersionKind(GVKEnvoyFilter)
 	ef.SetNamespace(ns)
-	ef.SetName(PayloadProcessingName)
+	ef.SetName(efName)
 	spec := map[string]any{
 		"targetRefs": []any{
 			map[string]any{
@@ -90,24 +90,27 @@ func payloadProcessingEnvoyFilter(ns, gatewayName string, priority *int64) *unst
 
 func TestPayloadProcessingEnvoyFilterReady(t *testing.T) {
 	const (
-		gwNS   = "openshift-ingress"
-		gwName = "maas-default-gateway"
+		gwNS     = "openshift-ingress"
+		gwName   = "partner"
+		tenantID = "partner"
 	)
+	efName := PayloadProcessingEnvoyFilterName(tenantID)
 	prioOK := PayloadProcessingEnvoyFilterPriority
 	prioLow := int64(0)
 
 	t.Run("missing EnvoyFilter", func(t *testing.T) {
 		c := fake.NewClientBuilder().Build()
-		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
 		require.NoError(t, err)
 		assert.False(t, ready)
 		assert.Contains(t, detail, "not found")
+		assert.Contains(t, detail, efName)
 		assert.Contains(t, detail, "404 NR")
 	})
 
 	t.Run("missing priority", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, nil)).Build()
-		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, efName, gwName, nil)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
 		require.NoError(t, err)
 		assert.False(t, ready)
 		assert.Contains(t, detail, "priority=missing")
@@ -115,24 +118,50 @@ func TestPayloadProcessingEnvoyFilterReady(t *testing.T) {
 	})
 
 	t.Run("priority too low", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, &prioLow)).Build()
-		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, efName, gwName, &prioLow)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
 		require.NoError(t, err)
 		assert.False(t, ready)
 		assert.Contains(t, detail, "priority=0")
 	})
 
 	t.Run("wrong gateway targetRef", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, "other-gw", &prioOK)).Build()
-		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, efName, "other-gw", &prioOK)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
 		require.NoError(t, err)
 		assert.False(t, ready)
 		assert.Contains(t, detail, "targetRefs[0].name")
 	})
 
+	t.Run("ignores default-tenant EnvoyFilter name for secondary tenants", func(t *testing.T) {
+		// Secondary tenants must look up payload-processing-<id>, not payload-processing.
+		c := fake.NewClientBuilder().WithObjects(
+			payloadProcessingEnvoyFilter(gwNS, PayloadProcessingName, gwName, &prioOK),
+		).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
+		require.NoError(t, err)
+		assert.False(t, ready)
+		assert.Contains(t, detail, efName)
+		assert.Contains(t, detail, "not found")
+	})
+
 	t.Run("ready", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, gwName, &prioOK)).Build()
-		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName)
+		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, efName, gwName, &prioOK)).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
+		require.NoError(t, err)
+		assert.True(t, ready)
+		assert.Empty(t, detail)
+	})
+
+	t.Run("default tenant uses unsuffixed EnvoyFilter name", func(t *testing.T) {
+		const (
+			defaultGW = "maas-default-gateway"
+			defaultID = ""
+		)
+		c := fake.NewClientBuilder().WithObjects(
+			payloadProcessingEnvoyFilter(gwNS, PayloadProcessingName, defaultGW, &prioOK),
+		).Build()
+		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, defaultGW, defaultID)
 		require.NoError(t, err)
 		assert.True(t, ready)
 		assert.Empty(t, detail)
