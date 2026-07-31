@@ -1074,10 +1074,14 @@ def get_ipp_deployment_env(deployment_name: str, namespace: str = GATEWAY_NAMESP
 
 
 def envoyfilter_target_gateway(name: str, namespace: str = GATEWAY_NAMESPACE) -> str:
+    """Return the gateway this IPP EnvoyFilter selects (workloadSelector or legacy targetRefs)."""
     envoyfilter = get_json_or_none("envoyfilter", name, namespace)
     if not envoyfilter:
         return ""
     spec = envoyfilter.get("spec") or {}
+    ws_labels = ((spec.get("workloadSelector") or {}).get("labels")) or {}
+    if gw := ws_labels.get("gateway.networking.k8s.io/gateway-name"):
+        return gw
     target_refs = spec.get("targetRefs") or []
     if target_refs:
         return target_refs[0].get("name") or ""

@@ -321,6 +321,9 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, params.GatewayName, wsLabels["gateway.networking.k8s.io/gateway-name"])
+	_, targetRefsFound, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
+	require.NoError(t, err)
+	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual anchors:
 	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),

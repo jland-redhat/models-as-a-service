@@ -659,6 +659,10 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		"spec", "workloadSelector", "labels"); err != nil {
 		return fmt.Errorf("write EnvoyFilter workloadSelector: %w", err)
 	}
+	// targetRefs and workloadSelector are mutually exclusive (Istio 1.26+). Drop any
+	// leftover targetRefs from older manifests so SSA/admission never sees both.
+	unstructured.RemoveNestedField(r.Object, "spec", "targetRefs")
+	unstructured.RemoveNestedField(r.Object, "spec", "targetRef")
 
 	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	beforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
