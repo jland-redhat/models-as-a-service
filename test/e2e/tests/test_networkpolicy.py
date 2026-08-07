@@ -39,7 +39,7 @@ class TestPayloadProcessingNetworkPolicyExists:
             f"NetworkPolicy {NETWORKPOLICY_NAME} must exist in {GATEWAY_NAMESPACE}"
         )
 
-    def test_pod_selector_covers_both_processors(self):
+    def test_pod_selector_covers_payload_processing(self):
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
         pod_selector = np["spec"]["podSelector"]
@@ -51,12 +51,25 @@ class TestPayloadProcessingNetworkPolicyExists:
         if app_expr:
             values = set(app_expr.get("values") or [])
             assert "payload-processing" in values, "podSelector must include payload-processing"
-            assert "payload-pre-processing" in values, "podSelector must include payload-pre-processing"
-        else:
-            match_labels = pod_selector.get("matchLabels") or {}
-            assert "app" in match_labels, (
-                f"podSelector must select payload-processing pods, got {pod_selector!r}"
+            assert "payload-pre-processing" not in values, (
+                "podSelector must not include removed payload-pre-processing"
             )
+        else:
+            # Reconciler may rewrite to LabelTenantInstance; accept that shape too.
+            tenant_expr = next(
+                (e for e in match_exprs if e.get("key") == "maas.opendatahub.io/tenant-instance"),
+                None,
+            )
+            if tenant_expr:
+                values = set(tenant_expr.get("values") or [])
+                assert any("payload-processing" in v for v in values), (
+                    f"podSelector must select payload-processing, got {pod_selector!r}"
+                )
+            else:
+                match_labels = pod_selector.get("matchLabels") or {}
+                assert "app" in match_labels, (
+                    f"podSelector must select payload-processing pods, got {pod_selector!r}"
+                )
 
     def test_ingress_uses_istio_managed_label(self):
         """Ingress must use gateway.istio.io/managed to cover all gateways."""

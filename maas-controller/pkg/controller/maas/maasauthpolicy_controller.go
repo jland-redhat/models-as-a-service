@@ -407,7 +407,8 @@ const (
 
 // celModelIdentity extracts model identity from the request at gateway level.
 // For path-routed inference (/<model-namespace>/<model-name>/...), extract from URL.
-// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc)
+// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by
+// the pre-auth json_to_metadata + Lua Envoy chain)
 // which may be a publisher ID (publishers/{ns}/models/{served-id}).
 // For listing endpoints like /v1/models where no model target exists, returns empty string
 // so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
@@ -1546,7 +1547,8 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 }
 
 // resolveHeaderModelKeys returns alternate model_access keys that match the value
-// ipp-pre sets in the X-Gateway-Model-Name header for body-based routing.
+// the pre-auth Envoy chain (json_to_metadata + Lua) sets in X-Gateway-Model-Name
+// for body-based routing.
 // Reads MaaSModelRef.status.resolvedModelAlias, which the modelref controller
 // populates from the backing CRD (publisher ID for LLMISvc, targetModel for ExternalModel).
 func (r *MaaSAuthPolicyReconciler) resolveHeaderModelKeys(ctx context.Context, ref maasv1alpha1.ModelRef) []string {

@@ -9,22 +9,8 @@ metadata:
   # SSA leaves this ConfigMap alone (see ApplyRendered). Set managed=true on the
   # live ConfigMap to opt back into continuous reconciler management.
 data:
-  custom-pre-processing-ipp-config.yaml: |
-    apiVersion: llm-d.ai/v1alpha1
-    kind: PayloadProcessorConfig
-    plugins:
-    - type: body-field-to-header
-      name: model-extractor
-      parameters:
-        fieldName: model
-        headerName: X-Gateway-Model-Name
-    - type: model-provider-resolver
-    profiles:
-    - name: default
-      plugins:
-        request:
-        - pluginRef: model-extractor
-        - pluginRef: model-provider-resolver
+  # Pre-auth body.model → X-Gateway-Model-Name is handled by the EnvoyFilter
+  # composite(json_to_metadata) + Lua chain (see manager/envoy-filter.yaml).
   custom-ipp-config.yaml: |
     apiVersion: llm-d.ai/v1alpha1
     kind: PayloadProcessorConfig

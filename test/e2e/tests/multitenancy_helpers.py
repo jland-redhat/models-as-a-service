@@ -1049,9 +1049,7 @@ def per_tenant_ipp_names(tenant_name: str) -> dict[str, str]:
     tenant_id = ipp_tenant_id(tenant_name)
     return {
         "processing_deployment": per_tenant_resource_name("payload-processing", tenant_id),
-        "pre_processing_deployment": per_tenant_resource_name("payload-pre-processing", tenant_id),
         "processing_service": per_tenant_resource_name("payload-processing", tenant_id),
-        "pre_processing_service": per_tenant_resource_name("payload-pre-processing", tenant_id),
         "envoyfilter": per_tenant_resource_name("payload-processing", tenant_id),
         "plugins_configmap": per_tenant_resource_name("payload-processing-plugins", tenant_id),
         "serviceaccount": per_tenant_resource_name("payload-processing", tenant_id),
@@ -1061,10 +1059,9 @@ def per_tenant_ipp_names(tenant_name: str) -> dict[str, str]:
 
 
 def wait_for_per_tenant_ipp_ready(case: dict[str, str], *, timeout: int = 240) -> dict[str, str]:
-    """Wait until tenant-scoped IPP Deployments and EnvoyFilter exist in the gateway namespace."""
+    """Wait until tenant-scoped IPP Deployment and EnvoyFilter exist in the gateway namespace."""
     names = per_tenant_ipp_names(case["tenant_label_name"])
     wait_for_deployment_available(names["processing_deployment"], GATEWAY_NAMESPACE, timeout=timeout)
-    wait_for_deployment_available(names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=timeout)
     wait_for_json("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE, timeout=timeout)
     return names
 
@@ -1155,9 +1152,7 @@ def aitenant_cleanup_resource_refs(case: dict[str, str]) -> list[tuple[str, str,
         refs.extend(
             [
                 ("deployment", ipp_names["processing_deployment"], GATEWAY_NAMESPACE),
-                ("deployment", ipp_names["pre_processing_deployment"], GATEWAY_NAMESPACE),
                 ("service", ipp_names["processing_service"], GATEWAY_NAMESPACE),
-                ("service", ipp_names["pre_processing_service"], GATEWAY_NAMESPACE),
                 ("envoyfilter", ipp_names["envoyfilter"], GATEWAY_NAMESPACE),
                 ("serviceaccount", ipp_names["serviceaccount"], GATEWAY_NAMESPACE),
                 ("configmap", ipp_names["plugins_configmap"], GATEWAY_NAMESPACE),

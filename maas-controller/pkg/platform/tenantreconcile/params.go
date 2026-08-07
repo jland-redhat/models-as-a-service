@@ -665,15 +665,16 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	unstructured.RemoveNestedField(r.Object, "spec", "targetRef")
 
 	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-	beforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
 	afterCluster := grpcClusterName(PayloadProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
 
 	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
+	// Per auth-stack: composite(json_to_metadata) + lua (INSERT_BEFORE) + ipp (INSERT_AFTER).
+	// Two stacks: WasmPlugin (ODH) + RHCL wasm = 6 filter patches, then 4 route disables.
 	const (
-		filterPatchCount      = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
+		filterPatchCount      = 6
 		routeDisablePatchBase = filterPatchCount
 		totalConfigPatches    = routeDisablePatchBase + 4
 	)
@@ -681,8 +682,12 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", totalConfigPatches, len(configPatches))
 	}
 
-	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster}
-	subFilterByIndex := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
+	// Only the post-auth ext_proc.ipp patches have a gRPC cluster (indices 2 and 5).
+	subFilterByIndex := []string{
+		anchorName, anchorName, anchorName,
+		rhclWasmFilterName, rhclWasmFilterName, rhclWasmFilterName,
+	}
+	ippClusterIndexes := map[int]struct{}{2: {}, 5: {}}
 
 	for i := 0; i < filterPatchCount; i++ {
 		patch, ok := configPatches[i].(map[string]any)
@@ -695,15 +700,17 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
 		}
 
-		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+		if _, isIPP := ippClusterIndexes[i]; isIPP {
+			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+			if err := unstructured.SetNestedField(patch, afterCluster, clusterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			}
 		}
 
 		configPatches[i] = patch
 	}
 
-	// Patches 4–7 disable ext_proc on all non-inference maas-api routes.
+	// Patches 6–9 disable post-auth ext_proc on all non-inference maas-api routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
 	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
 	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
@@ -750,7 +757,6 @@ func patchPayloadProcessingNetworkPolicy(log logr.Logger, r *unstructured.Unstru
 
 	tenantInstances := []any{
 		PayloadProcessingDeploymentName(params.TenantIdentifier),
-		PayloadPreProcessingDeploymentName(params.TenantIdentifier),
 	}
 	if err := unstructured.SetNestedField(r.Object, map[string]any{
 		"matchExpressions": []any{

@@ -3,7 +3,8 @@ kind: Kustomization
 
 resources:
   - ../after
-  - ../pre-processing
+  # Pre-auth model extraction is inlined in envoy-filter.yaml
+  # (json_to_metadata + Lua) — no payload-pre-processing Deployment.
   - envoy-filter.yaml
   - plugins-configmap.yaml
 

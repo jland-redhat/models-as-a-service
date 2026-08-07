@@ -120,6 +120,11 @@ Client
   v
 Gateway (port 80)                                    # identical to OpenShift
   |
+  +-- Composite json_to_metadata + Lua               # pre-auth body.model → header
+  |     |
+  |     +-- Extract model from JSON body (metadata)
+  |     +-- Set X-Gateway-Model-Name + clearRouteCache
+  |
   +-- Kuadrant Wasm filter (auth check)              # identical to OpenShift
   |     |
   |     +-- API key? -> Authorino -> maas-api:8443   # identical to OpenShift
@@ -127,8 +132,7 @@ Gateway (port 80)                                    # identical to OpenShift
   |
   +-- IPP ext-proc (payload-processing)              # identical to OpenShift
   |     |
-  |     +-- Extract model name from request body
-  |     +-- Resolve ExternalModel -> set X-Gateway-Model-Name header
+  |     +-- Resolve ExternalModel / provider
   |     +-- Inject provider credentials
   |     +-- Translate API format (anthropic/bedrock/vertex -> openai)
   |

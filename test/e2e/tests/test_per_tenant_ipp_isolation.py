@@ -38,6 +38,7 @@ from multitenancy_helpers import (
     make_tenant_model_accessible,
     new_named_tenant_case,
     per_tenant_ipp_names,
+    per_tenant_resource_name,
     provision_tenant_model,
     redact_sensitive,
     require_aitenant_crd,
@@ -203,14 +204,17 @@ class TestPerTenantIPPInfrastructure:
             processing = wait_for_deployment_available(
                 names["processing_deployment"], GATEWAY_NAMESPACE, timeout=240
             )
-            pre_processing = wait_for_deployment_available(
-                names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=240
-            )
             assert processing["metadata"]["name"] == names["processing_deployment"]
-            assert pre_processing["metadata"]["name"] == names["pre_processing_deployment"]
 
             service = wait_for_json("service", names["processing_service"], GATEWAY_NAMESPACE, timeout=180)
             assert service["metadata"]["name"] == names["processing_service"]
+
+            # Pre-auth extraction is in-Envoy; pre-processing Deployment must be gone.
+            assert get_json_or_none(
+                "deployment",
+                per_tenant_resource_name("payload-pre-processing", ipp_tenant_id(case["tenant_label_name"])),
+                GATEWAY_NAMESPACE,
+            ) is None
 
     def test_per_tenant_ipp_env_vars(self, ipp_tenant_cases):
         for case in ipp_tenant_cases:
@@ -249,23 +253,20 @@ class TestPerTenantIPPInfrastructure:
             want_processing = (
                 f"outbound|9004||{names['processing_service']}.{GATEWAY_NAMESPACE}.svc.cluster.local"
             )
-            want_pre_processing = (
-                f"outbound|9004||{names['pre_processing_service']}.{GATEWAY_NAMESPACE}.svc.cluster.local"
-            )
             assert want_processing in clusters, (
                 f"{names['envoyfilter']} missing processing cluster {want_processing!r}; got {clusters!r}"
             )
-            assert want_pre_processing in clusters, (
-                f"{names['envoyfilter']} missing pre-processing cluster {want_pre_processing!r}; "
-                f"got {clusters!r}"
-            )
+            # Pre-auth path is in-Envoy (json_to_metadata + Lua); no pre-processing gRPC cluster.
+            for cluster in clusters:
+                assert "payload-pre-processing" not in cluster, (
+                    f"{names['envoyfilter']} should not reference payload-pre-processing; got {clusters!r}"
+                )
 
     def test_default_tenant_keeps_legacy_ipp_names(self):
         default_names = per_tenant_ipp_names(DEFAULT_AITENANT_NAME)
         assert default_names["processing_deployment"] == "payload-processing"
-        assert default_names["pre_processing_deployment"] == "payload-pre-processing"
         assert get_json_or_none("deployment", "payload-processing", GATEWAY_NAMESPACE) is not None
-        assert get_json_or_none("deployment", "payload-pre-processing", GATEWAY_NAMESPACE) is not None
+        assert get_json_or_none("deployment", "payload-pre-processing", GATEWAY_NAMESPACE) is None
 
     def test_multiple_tenant_ipp_stacks_coexist(self, ipp_tenant_cases):
         deployment_names = {
@@ -412,7 +413,6 @@ class TestPerTenantIPPCleanup:
 
             assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
             assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
-            wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
         finally:
             cleanup_discovery_case(case, delete_gateway=True)
 

@@ -294,12 +294,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, fmt.Sprintf("%s.%s.svc.cluster.local", PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace), payloadHost)
 
-	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingDeploymentName(tenantID))
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
-	preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, fmt.Sprintf("%s.%s.svc.cluster.local", PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace), preProcessingHost)
+	assert.Nil(t, findResource(resources, GVKDestinationRule, PayloadPreProcessingDeploymentName(tenantID)),
+		"payload-pre-processing DestinationRule should not be rendered")
 
 	payloadService := requireResource(t, resources, GVKService, PayloadProcessingServiceName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
@@ -326,21 +322,34 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual anchors:
-	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
-	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
+	//   [0..2] WasmPlugin: composite + lua BEFORE auth, ipp AFTER
+	//   [3..5] RHCL wasm: same trio
+	//   [6..9] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 8, "expected eight configPatches (4x filter insert + 4x MERGE)")
+	require.Len(t, configPatches, 10, "expected ten configPatches (6x filter insert + 4x MERGE)")
 
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
-	wantAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
+	wantOps := []string{
+		"INSERT_BEFORE", "INSERT_BEFORE", "INSERT_AFTER",
+		"INSERT_BEFORE", "INSERT_BEFORE", "INSERT_AFTER",
+	}
+	wantAnchors := []string{
+		wantWasmPluginAnchor, wantWasmPluginAnchor, wantWasmPluginAnchor,
+		rhclWasmFilterName, rhclWasmFilterName, rhclWasmFilterName,
+	}
+	wantFilterNames := []string{
+		"envoy.filters.http.composite.model_from_body",
+		"envoy.filters.http.lua.model_header_reroute",
+		"envoy.filters.http.ext_proc.ipp",
+		"envoy.filters.http.composite.model_from_body",
+		"envoy.filters.http.lua.model_header_reroute",
+		"envoy.filters.http.ext_proc.ipp",
+	}
 
-	for i, raw := range configPatches[:4] {
+	for i, raw := range configPatches[:6] {
 		cp, ok := raw.(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -350,12 +359,20 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
 		assert.Equal(t, wantAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
 
-		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
+		filterName, _, _ := unstructured.NestedString(cp, "patch", "value", "name")
+		assert.Equal(t, wantFilterNames[i], filterName, "configPatches[%d] filter name", i)
+
+		cluster, clusterFound, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+		if i == 2 || i == 5 {
+			require.True(t, clusterFound, "configPatches[%d] should have grpc cluster", i)
+			assert.Equal(t, wantAfterCluster, cluster, "configPatches[%d] grpc cluster_name", i)
+		} else {
+			assert.False(t, clusterFound, "configPatches[%d] should not have grpc cluster", i)
+		}
 	}
 
 	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
-	for i := 4; i < 8; i++ {
+	for i := 6; i < 10; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -363,13 +380,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, "MERGE", op, "configPatches[%d] operation", i)
 
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
-		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-4)
+		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-6)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
-		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
+		_, ippPreFound, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
 		require.NoError(t, err, "configPatches[%d] ipp-pre disabled field", i)
-		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
-		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
+		assert.False(t, ippPreFound, "configPatches[%d] should not disable removed ipp-pre", i)
 
 		ippDisabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp", "disabled")
 		require.NoError(t, err, "configPatches[%d] ipp disabled field", i)
@@ -377,16 +393,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.True(t, ippDisabled, "configPatches[%d] ipp should be disabled", i)
 	}
 
-	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
-	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingDeploymentName(tenantID))
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeDeployment.GetNamespace())
-	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
-	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadBeforeDeployment, LabelTenantInstance))
-	assertDeploymentSelectorLabelAbsent(t, payloadBeforeDeployment, LabelTenantInstance)
-
-	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingServiceName(tenantID))
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
-	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requireServiceSelectorLabel(t, payloadBeforeService, LabelTenantInstance))
+	assert.Nil(t, findResource(resources, GVKDeployment, PayloadPreProcessingDeploymentName(tenantID)),
+		"payload-pre-processing Deployment should not be rendered")
+	assert.Nil(t, findResource(resources, GVKService, PayloadPreProcessingServiceName(tenantID)),
+		"payload-pre-processing Service should not be rendered")
 
 	payloadClusterRoleBinding := requireResource(t, resources, GVKClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
 	subjects, found, err := unstructured.NestedSlice(payloadClusterRoleBinding.Object, "subjects")
@@ -514,8 +524,8 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	assert.Equal(t, "true", requireEnvVarValue(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 	assert.Equal(t, "payload-processing-redteam", requireDeploymentSelectorLabel(t, payloadDeployment, LabelTenantInstance))
 
-	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
-	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+	assert.Nil(t, findResource(resources, GVKDeployment, "payload-pre-processing-redteam"),
+		"payload-pre-processing should not be rendered for non-default tenants")
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

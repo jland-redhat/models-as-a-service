@@ -18,7 +18,23 @@ spec:
     labels:
       gateway.networking.k8s.io/gateway-name: maas-default-gateway
   configPatches:
-    # Stage 1: must run BEFORE the WasmPlugin so auth sees X-Gateway-Model-Name.
+    # =========================================================================
+    # Pre-auth body → header (replaces ext_proc.ipp-pre / payload-pre-processing)
+    #
+    # Chain: composite(json_to_metadata) → lua → auth → ext_proc.ipp → router
+    #
+    # Json-To-Metadata alone cannot replace IPP-pre: it only writes dynamic
+    # metadata (not a request header) and cannot clearRouteCache. Lua copies
+    # metadata.model → X-Gateway-Model-Name and clears the route cache so
+    # HTTPRoute header matches and AuthPolicy CEL see the model identity.
+    #
+    # Composite path-matches inference suffixes so non-inference routes skip
+    # body parsing. Lua is a cheap no-op when metadata.model is absent.
+    # =========================================================================
+
+    # ── WasmPlugin anchor (ODH / community Kuadrant) ─────────────────────────
+    # INSERT_BEFORE twice: first composite, then lua → final order
+    # composite → lua → auth.
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -31,23 +47,81 @@ spec:
       patch:
         operation: INSERT_BEFORE
         value:
-          name: envoy.filters.http.ext_proc.ipp-pre
+          name: envoy.filters.http.composite.model_from_body
           typed_config:
-            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-            failure_mode_allow: true
-            allow_mode_override: true
-            processing_mode:
-              request_header_mode: "SEND"
-              response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
-            grpc_service:
-              envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
-              timeout: 300s
-            message_timeout: 300s
-    # Stage 2: must run AFTER the WasmPlugin (needs auth to have completed).
+            "@type": type.googleapis.com/envoy.extensions.common.matching.v3.ExtensionWithMatcher
+            extension_config:
+              name: composite
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+            xds_matcher:
+              matcher_list:
+                matchers:
+                - predicate:
+                    or_matcher:
+                      predicate:
+                      - single_predicate:
+                          input:
+                            name: request-headers
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                              header_name: ":path"
+                          value_match:
+                            suffix: "/v1/chat/completions"
+                      - single_predicate:
+                          input:
+                            name: request-headers
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                              header_name: ":path"
+                          value_match:
+                            suffix: "/v1/completions"
+                  on_match:
+                    action:
+                      name: run-json-to-metadata
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                        typed_config:
+                          name: envoy.filters.http.json_to_metadata
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+                            request_rules:
+                              rules:
+                              - selectors:
+                                - key: model
+                                on_present:
+                                  key: model
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua.model_header_reroute
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            default_source_code:
+              inline_string: |
+                local MD_NS = "envoy.filters.http.json_to_metadata"
+                local HDR = "x-gateway-model-name"
+
+                function envoy_on_request(request_handle)
+                  local meta = request_handle:streamInfo():dynamicMetadata():get(MD_NS)
+                  if not meta then return end
+                  local model = meta["model"]
+                  if model == nil or model == "" then return end
+                  -- Coerce non-string metadata values (defensive).
+                  model = tostring(model)
+                  request_handle:headers():replace(HDR, model)
+                  request_handle:clearRouteCache()
+                end
+    # Stage 2: must run AFTER auth (needs auth to have completed).
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -65,10 +139,13 @@ spec:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             failure_mode_allow: false
             allow_mode_override: true
+            # Request BUFFERED: json_to_metadata already fully buffers the body
+            # before this filter runs; FULL_DUPLEX_STREAMED can see empty/EOS-only
+            # chunks. Response stays FULL_DUPLEX_STREAMED for SSE.
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "FULL_DUPLEX_STREAMED"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
@@ -77,9 +154,11 @@ spec:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
               timeout: 300s
             message_timeout: 300s
-    # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
-    # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL 1.4.
-    # These patches require priority > Kuadrant's EF (see spec.priority above).
+
+    # ── RHCL 1.4 wasm anchor (envoy.filters.http.wasm; no WasmPlugin CR) ─────
+    # Only one anchor pair matches per cluster: WasmPlugin on ODH/community
+    # Kuadrant, wasm filter on RHCL 1.4. These patches require priority >
+    # Kuadrant's EF (see spec.priority above).
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -92,22 +171,79 @@ spec:
       patch:
         operation: INSERT_BEFORE
         value:
-          name: envoy.filters.http.ext_proc.ipp-pre
+          name: envoy.filters.http.composite.model_from_body
           typed_config:
-            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-            failure_mode_allow: true
-            allow_mode_override: true
-            processing_mode:
-              request_header_mode: "SEND"
-              response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
-            grpc_service:
-              envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
-              timeout: 300s
-            message_timeout: 300s
+            "@type": type.googleapis.com/envoy.extensions.common.matching.v3.ExtensionWithMatcher
+            extension_config:
+              name: composite
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.Composite
+            xds_matcher:
+              matcher_list:
+                matchers:
+                - predicate:
+                    or_matcher:
+                      predicate:
+                      - single_predicate:
+                          input:
+                            name: request-headers
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                              header_name: ":path"
+                          value_match:
+                            suffix: "/v1/chat/completions"
+                      - single_predicate:
+                          input:
+                            name: request-headers
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                              header_name: ":path"
+                          value_match:
+                            suffix: "/v1/completions"
+                  on_match:
+                    action:
+                      name: run-json-to-metadata
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.filters.http.composite.v3.ExecuteFilterAction
+                        typed_config:
+                          name: envoy.filters.http.json_to_metadata
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+                            request_rules:
+                              rules:
+                              - selectors:
+                                - key: model
+                                on_present:
+                                  key: model
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.wasm
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua.model_header_reroute
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            default_source_code:
+              inline_string: |
+                local MD_NS = "envoy.filters.http.json_to_metadata"
+                local HDR = "x-gateway-model-name"
+
+                function envoy_on_request(request_handle)
+                  local meta = request_handle:streamInfo():dynamicMetadata():get(MD_NS)
+                  if not meta then return end
+                  local model = meta["model"]
+                  if model == nil or model == "" then return end
+                  model = tostring(model)
+                  request_handle:headers():replace(HDR, model)
+                  request_handle:clearRouteCache()
+                end
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -125,10 +261,13 @@ spec:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             failure_mode_allow: false
             allow_mode_override: true
+            # Request BUFFERED: json_to_metadata already fully buffers the body
+            # before this filter runs; FULL_DUPLEX_STREAMED can see empty/EOS-only
+            # chunks. Response stays FULL_DUPLEX_STREAMED for SSE.
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "FULL_DUPLEX_STREAMED"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
@@ -137,7 +276,9 @@ spec:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
               timeout: 300s
             message_timeout: 300s
-    # Disable ext_proc on all non-inference maas-api routes.
+
+    # Disable post-auth ext_proc on all non-inference maas-api routes.
+    # Pre-auth composite is already path-gated; lua no-ops without metadata.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
     # Rule indices correspond to httproute.yaml rules:
     #   0 = /v1/models, 1 = /v1/subscriptions, 2 = /v1/api-keys, 3 = /maas-api/*
@@ -152,9 +293,6 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
@@ -169,9 +307,6 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
@@ -186,9 +321,6 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
@@ -203,9 +335,6 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.ipp-pre:
-              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
-              disabled: true
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true

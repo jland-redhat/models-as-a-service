@@ -19,7 +19,7 @@ POST https://maas.<cluster-domain>/v1/chat/completions
 The gateway reads the `model` field from the JSON body and routes the request to the correct backend automatically. This is fully compatible with OpenAI SDKs and any client that speaks the OpenAI Chat Completions API.
 
 !!! note "Administrator prerequisite"
-    Body-based routing requires the Inference Payload Processing (IPP) component to be deployed. IPP reads the `model` field from the request body and sets the routing header for the gateway. Contact your administrator to confirm IPP is available on your cluster.
+    Body-based routing requires the gateway EnvoyFilter that extracts `model` from the JSON body into `X-Gateway-Model-Name` before auth (json_to_metadata + Lua), plus post-auth Inference Payload Processing (IPP) for provider credentials and translation. Contact your administrator if body-routed `/v1/*` calls return `404 NR`.
 
 !!! info "Legacy path-based endpoints"
     MaaS also supports **path-based endpoints** where the model is encoded in the URL path (e.g. `https://maas.<cluster-domain>/llm/my-model/v1/chat/completions`). These endpoints continue to work, but the body-based endpoint above is recommended for new integrations because it matches the standard OpenAI API contract and works with a single `base_url` for all models. See [Path-Based Routing (Legacy)](#path-based-routing-legacy) for details.

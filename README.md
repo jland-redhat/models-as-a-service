@@ -160,6 +160,12 @@ Online Documentation: [https://opendatahub-io.github.io/models-as-a-service/](ht
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
 
+## Architecture: pre-auth model extraction
+
+Body-based routing (`POST /v1/chat/completions` with `model` in the JSON body) no longer uses a dedicated `payload-pre-processing` ext_proc hop before auth. The gateway chain is **json_to_metadata → Lua (`X-Gateway-Model-Name` + `clearRouteCache`) → auth → post-auth IPP**.
+
+See **[README-preauth-model-extraction.md](README-preauth-model-extraction.md)** for before/after diagrams, Auth vs provider-resolution notes, and the request-body buffering harden for production.
+
 ## 🤝 Contributing
 
 We welcome contributions! Please:

@@ -776,21 +776,20 @@ def _ipp_resource_name(base_name: str, tenant_name: Optional[str] = None) -> str
 
 
 def _check_ipp_pods_deployed(tenant_name: Optional[str] = None):
-    """Check if payload-processing (IPP) pods are deployed in the gateway namespace."""
-    for base_name in ("payload-pre-processing", "payload-processing"):
-        name = _ipp_resource_name(base_name, tenant_name)
-        result = subprocess.run(
-            ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
-             "-o", "jsonpath={.status.readyReplicas}"],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            log.debug("oc check for %s failed: %s", name, result.stderr.strip())
-            return False
-        ready = result.stdout.strip()
-        if not ready or ready == "0":
-            log.debug("Deployment %s has no ready replicas", name)
-            return False
+    """Check if post-auth payload-processing (IPP) pods are deployed in the gateway namespace."""
+    name = _ipp_resource_name("payload-processing", tenant_name)
+    result = subprocess.run(
+        ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
+         "-o", "jsonpath={.status.readyReplicas}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        log.debug("oc check for %s failed: %s", name, result.stderr.strip())
+        return False
+    ready = result.stdout.strip()
+    if not ready or ready == "0":
+        log.debug("Deployment %s has no ready replicas", name)
+        return False
     return True
 
 
