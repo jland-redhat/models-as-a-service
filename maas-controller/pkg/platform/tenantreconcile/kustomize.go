@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -175,24 +176,87 @@ func fileExists(p string) bool {
 	return fs.Exists(p)
 }
 
+// IPPProfile returns the IPP implementation profile from MAAS_IPP_PROFILE.
+// Unknown or empty values default to llm-d.
+func IPPProfile() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(EnvIPPProfile))) {
+	case IPPProfilePraxis:
+		return IPPProfilePraxis
+	default:
+		return IPPProfileLLMD
+	}
+}
+
 // DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS or a dev default relative to cwd (models-as-a-service repo layout).
+// Stock odh/xks env values are remapped for MAAS_IPP_PROFILE (see applyIPPProfileToManifestPath).
 func DefaultManifestPath() string {
 	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
-		return v
+		return applyIPPProfileToManifestPath(v)
+	}
+	if IPPProfile() == IPPProfilePraxis {
+		return "../maas-api/deploy/overlays/odh-praxis"
 	}
 	return "../maas-api/deploy/overlays/odh"
 }
 
 // ManifestPathForPlatform returns the appropriate kustomize overlay path based on
-// whether the cluster is OpenShift (isOCP=true) or vanilla Kubernetes (isOCP=false).
+// whether the cluster is OpenShift (isOCP=true) or vanilla Kubernetes (isOCP=false),
+// and MAAS_IPP_PROFILE (llm-d vs praxis).
 // The xKS overlay avoids OCP-specific resources like service-serving-certs and
 // service-ca ConfigMap injection that don't exist on non-OpenShift clusters.
+//
+// MAAS_PLATFORM_MANIFESTS overrides platform detection. Known stock paths
+// (.../overlays/odh|xks and their *-praxis variants) are still remapped by
+// MAAS_IPP_PROFILE so the xKS controller overlay can hardcode .../overlays/xks
+// without blocking Praxis. Any other path is treated as a full custom override.
 func ManifestPathForPlatform(isOCP bool) string {
 	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
-		return v
+		return applyIPPProfileToManifestPath(v)
 	}
-	if isOCP {
+	praxis := IPPProfile() == IPPProfilePraxis
+	switch {
+	case isOCP && praxis:
+		return "/maas-api/deploy/overlays/odh-praxis"
+	case isOCP:
 		return "/maas-api/deploy/overlays/odh"
+	case praxis:
+		return "/maas-api/deploy/overlays/xks-praxis"
+	default:
+		return "/maas-api/deploy/overlays/xks"
 	}
-	return "/maas-api/deploy/overlays/xks"
+}
+
+// applyIPPProfileToManifestPath remaps known stock tenant overlays for the active
+// IPP profile. Custom MAAS_PLATFORM_MANIFESTS values are returned unchanged.
+func applyIPPProfileToManifestPath(path string) string {
+	trimmed := strings.TrimSuffix(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return path
+	}
+	praxis := IPPProfile() == IPPProfilePraxis
+
+	switch {
+	case strings.HasSuffix(trimmed, "/overlays/xks"):
+		if praxis {
+			return trimmed + "-praxis"
+		}
+		return trimmed
+	case strings.HasSuffix(trimmed, "/overlays/odh"):
+		if praxis {
+			return trimmed + "-praxis"
+		}
+		return trimmed
+	case strings.HasSuffix(trimmed, "/overlays/xks-praxis"):
+		if praxis {
+			return trimmed
+		}
+		return strings.TrimSuffix(trimmed, "-praxis")
+	case strings.HasSuffix(trimmed, "/overlays/odh-praxis"):
+		if praxis {
+			return trimmed
+		}
+		return strings.TrimSuffix(trimmed, "-praxis")
+	default:
+		return path
+	}
 }

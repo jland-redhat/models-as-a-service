@@ -96,3 +96,43 @@ func TestPreparePayloadProcessingPluginsConfigMapApply(t *testing.T) {
 		assert.Nil(t, u.GetAnnotations())
 	})
 }
+
+func TestIsLiveResourceUnmanagedPluginsProfileFlip(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+
+	liveCM := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PayloadProcessingPluginsConfigMapName,
+			Namespace: "istio-system",
+			Annotations: map[string]string{
+				AnnotationManaged: "false",
+			},
+		},
+		Data: map[string]string{
+			"custom-ipp-config.yaml": "llm-d",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(liveCM).Build()
+
+	rendered := &unstructured.Unstructured{}
+	rendered.SetGroupVersionKind(GVKConfigMap)
+	rendered.SetNamespace("istio-system")
+	rendered.SetName(PayloadProcessingPluginsConfigMapName)
+	require.NoError(t, unstructured.SetNestedStringMap(rendered.Object, map[string]string{
+		"extproc.yaml":     "praxis",
+		"pre-extproc.yaml": "praxis-pre",
+	}, "data"))
+
+	assert.False(t, isLiveResourceUnmanaged(context.Background(), c, rendered),
+		"profile flip (different data keys) must re-apply unmanaged plugins ConfigMap")
+
+	sameKeys := rendered.DeepCopy()
+	require.NoError(t, unstructured.SetNestedStringMap(sameKeys.Object, map[string]string{
+		"custom-ipp-config.yaml": "still-llm-d-user-edit",
+	}, "data"))
+	assert.True(t, isLiveResourceUnmanaged(context.Background(), c, sameKeys),
+		"same data keys must continue to honor managed=false")
+}

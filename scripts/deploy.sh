@@ -660,6 +660,7 @@ main() {
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
     local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")}"
+    local cm_praxis_extproc_image="${PRAXIS_EXTPROC_IMAGE:-$(get_odh_overlay_param praxis-extproc-image 2>/dev/null || echo "quay.io/maas/praxis-extproc:dev")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
     local cm_monitoring_namespace="${MONITORING_NAMESPACE:-opendatahub}"
 
@@ -668,6 +669,7 @@ main() {
       --from-literal="maas-api-image=${cm_maas_api_image}" \
       --from-literal="maas-controller-image=${cm_maas_controller_image}" \
       --from-literal="payload-processing-image=${cm_payload_processing_image}" \
+      --from-literal="praxis-extproc-image=${cm_praxis_extproc_image}" \
       --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
       --from-literal="monitoring-namespace=${cm_monitoring_namespace}" \
       --dry-run=client -o yaml | kubectl apply -f - || {
@@ -1019,17 +1021,32 @@ install_optional_operators() {
 
   local data_dir="${SCRIPT_DIR}/data"
 
+  # If cert-manager is already serving (common on RHOAI clusters), skip its
+  # subscription/OperatorGroup apply. Re-applying can create a second
+  # OperatorGroup and put the CSV into TooManyOperatorGroups/Failed.
+  local skip_cert_manager=false
+  if kubectl get pods -n cert-manager -l app.kubernetes.io/name=cert-manager --field-selector=status.phase=Running 2>/dev/null | grep -q Running \
+    || kubectl get pods -n cert-manager --field-selector=status.phase=Running 2>/dev/null | grep -q cert-manager; then
+    log_info "cert-manager already running — skipping subscription apply"
+    skip_cert_manager=true
+  fi
+
   # Apply both subscriptions in parallel (they're independent)
   log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
-  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
-  local cert_manager_pid=$!
+  local cert_manager_pid=""
+  if [[ "$skip_cert_manager" != "true" ]]; then
+    kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
+    cert_manager_pid=$!
+  fi
   kubectl apply -f "${data_dir}/lws-subscription.yaml" &
   local lws_pid=$!
 
   # Wait for both apply commands to complete and capture individual exit codes
   local cert_manager_apply_rc=0
   local lws_apply_rc=0
-  wait $cert_manager_pid || cert_manager_apply_rc=$?
+  if [[ -n "$cert_manager_pid" ]]; then
+    wait $cert_manager_pid || cert_manager_apply_rc=$?
+  fi
   wait $lws_pid || lws_apply_rc=$?
 
   if [[ $cert_manager_apply_rc -ne 0 ]]; then
@@ -1043,15 +1060,20 @@ install_optional_operators() {
 
   # Wait for both subscriptions to be installed (can run in parallel too)
   log_info "Waiting for operators to be installed..."
-  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
-  local cert_wait_pid=$!
+  local cert_wait_pid=""
+  if [[ "$skip_cert_manager" != "true" ]]; then
+    waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
+    cert_wait_pid=$!
+  fi
   waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
   local lws_wait_pid=$!
 
   # Wait for both to complete and capture individual exit codes
   local cert_wait_rc=0
   local lws_wait_rc=0
-  wait $cert_wait_pid || cert_wait_rc=$?
+  if [[ -n "$cert_wait_pid" ]]; then
+    wait $cert_wait_pid || cert_wait_rc=$?
+  fi
   wait $lws_wait_pid || lws_wait_rc=$?
 
   if [[ $cert_wait_rc -ne 0 ]]; then

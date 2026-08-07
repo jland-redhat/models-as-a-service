@@ -61,7 +61,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
-		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
+		PayloadProcessingImage:  payloadProcessingImageForProfile(),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
 	}
@@ -71,10 +71,21 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	log.Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
+		"ippProfile", IPPProfile(),
 		"subscriptionNamespace", params.SubscriptionNamespace,
 		"gatewayName", params.GatewayName)
 
 	return params, nil
+}
+
+// payloadProcessingImageForProfile resolves the IPP container image for the
+// active MAAS_IPP_PROFILE. Praxis uses RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE so the
+// llm-d ConfigMap image is not applied to Praxis pods.
+func payloadProcessingImageForProfile() string {
+	if IPPProfile() == IPPProfilePraxis {
+		return firstNonEmpty(os.Getenv("RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE"), DefaultPraxisPayloadProcessingImage)
+	}
+	return firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage)
 }
 
 func firstNonEmpty(values ...string) string {
@@ -251,30 +262,7 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 	if controllerNamespace == "" {
 		return nil
 	}
-	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
-	if err != nil || !found || len(ingress) == 0 {
-		return err
-	}
-	rule, ok := ingress[0].(map[string]any)
-	if !ok {
-		return nil
-	}
-	from, ok := rule["from"].([]any)
-	if !ok || len(from) == 0 {
-		return nil
-	}
-	peer, ok := from[0].(map[string]any)
-	if !ok {
-		return nil
-	}
-	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	nsSelector["matchLabels"] = map[string]any{
-		"kubernetes.io/metadata.name": controllerNamespace,
-	}
-	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+	return patchNetworkPolicyIngressNamespace(r, 0, controllerNamespace)
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
@@ -419,6 +407,10 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
+	}
+	// Pre-processing is data-plane only; it must not run ExternalModel reconcile.
+	if err := setOrAddEnvVar(r, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+		return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
 	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
@@ -630,17 +622,60 @@ func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 			return fmt.Errorf("write %s DestinationRule host: %w", name, err)
 		}
 	}
+	// Keep tls.sni aligned with the service hostname. Without an explicit SNI,
+	// Envoy falls back to the Istio cluster name (outbound|port||host), which
+	// rustls rejects (illegal SNI) when the ExtProc upstream uses TLS.
+	if err := unstructured.SetNestedField(r.Object, newHost, "spec", "trafficPolicy", "tls", "sni"); err != nil {
+		return fmt.Errorf("write %s DestinationRule tls.sni: %w", name, err)
+	}
 	return nil
 }
 
 const rhclWasmFilterName = "envoy.filters.http.wasm"
 
+// Kuadrant auth filter names in the gateway HTTP chain vary by Istio release.
+// Emit INSERT_BEFORE/AFTER for each known name; istiod applies only the pair
+// whose subFilter exists (others are no-ops). Avoids probing istiod version.
+//
+//	≤1.25:  extenstions.istio.io/wasmplugin/...  (Istio typo)
+//	1.26–1.29: extensions.istio.io/wasmplugin/...
+//	≥1.30:  extensions.istio.io/trafficextension/...~istio-translated-wasmplugin
+//	RHCL 1.4: envoy.filters.http.wasm
+func wasmpluginAnchorNameLegacyTypo(gatewayNamespace, gatewayName string) string {
+	return fmt.Sprintf("extenstions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
+}
+
 func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
 	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
 }
 
+func trafficExtensionAnchorName(gatewayNamespace, gatewayName string) string {
+	return fmt.Sprintf("extensions.istio.io/trafficextension/%s.kuadrant-%s~istio-translated-wasmplugin", gatewayNamespace, gatewayName)
+}
+
+// kuadrantAuthFilterAnchors returns auth-filter names used as EnvoyFilter
+// INSERT anchors, one entry per supported mesh variant (order matches YAML).
+func kuadrantAuthFilterAnchors(gatewayNamespace, gatewayName string) []string {
+	return []string{
+		wasmpluginAnchorNameLegacyTypo(gatewayNamespace, gatewayName),
+		wasmpluginAnchorName(gatewayNamespace, gatewayName),
+		trafficExtensionAnchorName(gatewayNamespace, gatewayName),
+		rhclWasmFilterName,
+	}
+}
+
+// grpcClusterName is the Istio CDS name for a Service (used by the llm-d IPP
+// EnvoyFilter). Prefer extProcClusterName + CLUSTER ADD for Praxis: outbound|*
+// clusters inject istio.metadata_exchange and break non-mesh gRPC.
 func grpcClusterName(service, namespace string, port int) string {
 	return fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local", port, service, namespace)
+}
+
+// extProcClusterName returns the dedicated Envoy cluster name for a Praxis
+// ExtProc Service. These clusters are ADD'd by the payload-processing-praxis
+// EnvoyFilter without istio.metadata_exchange.
+func extProcClusterName(service string) string {
+	return service + "-extproc"
 }
 
 func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
@@ -664,25 +699,47 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	unstructured.RemoveNestedField(r.Object, "spec", "targetRefs")
 	unstructured.RemoveNestedField(r.Object, "spec", "targetRef")
 
-	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-	beforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
-	afterCluster := grpcClusterName(PayloadProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
+	anchors := kuadrantAuthFilterAnchors(params.GatewayNamespace, params.GatewayName)
+	beforeService := PayloadPreProcessingDeploymentName(params.TenantIdentifier)
+	afterService := PayloadProcessingDeploymentName(params.TenantIdentifier)
+	beforeHost := fmt.Sprintf("%s.%s.svc.cluster.local", beforeService, params.GatewayNamespace)
+	afterHost := fmt.Sprintf("%s.%s.svc.cluster.local", afterService, params.GatewayNamespace)
 
 	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
 	const (
-		filterPatchCount      = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
-		routeDisablePatchBase = filterPatchCount
-		totalConfigPatches    = routeDisablePatchBase + 4
+		// One INSERT_BEFORE + INSERT_AFTER pair per kuadrantAuthFilterAnchors entry.
+		filterPatchCount       = 8
+		routeDisablePatchBase  = filterPatchCount
+		routeDisablePatchCount = 4
+		clusterPatchBase       = routeDisablePatchBase + routeDisablePatchCount
+		clusterPatchCount      = 2
+		legacyConfigPatches    = clusterPatchBase // llm-d: 8 filter + 4 route
+		praxisConfigPatches    = clusterPatchBase + clusterPatchCount
 	)
-	if !found || len(configPatches) < totalConfigPatches {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", totalConfigPatches, len(configPatches))
+	if !found || len(configPatches) < legacyConfigPatches {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", legacyConfigPatches, len(configPatches))
+	}
+	if len(anchors)*2 != filterPatchCount {
+		return fmt.Errorf("internal: filterPatchCount %d != 2*%d auth anchors", filterPatchCount, len(anchors))
 	}
 
-	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster}
-	subFilterByIndex := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
+	useDedicatedClusters := len(configPatches) >= praxisConfigPatches
+	beforeCluster := grpcClusterName(beforeService, params.GatewayNamespace, 9004)
+	afterCluster := grpcClusterName(afterService, params.GatewayNamespace, 9004)
+	if useDedicatedClusters {
+		beforeCluster = extProcClusterName(beforeService)
+		afterCluster = extProcClusterName(afterService)
+	}
+
+	subFilterByIndex := make([]string, 0, filterPatchCount)
+	clusterByIndex := make([]string, 0, filterPatchCount)
+	for _, anchor := range anchors {
+		subFilterByIndex = append(subFilterByIndex, anchor, anchor)
+		clusterByIndex = append(clusterByIndex, beforeCluster, afterCluster)
+	}
 
 	for i := 0; i < filterPatchCount; i++ {
 		patch, ok := configPatches[i].(map[string]any)
@@ -703,10 +760,10 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		configPatches[i] = patch
 	}
 
-	// Patches 4–7 disable ext_proc on all non-inference maas-api routes.
+	// Patches after filter inserts disable ext_proc on non-inference maas-api routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
 	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
+	for i := routeDisablePatchBase; i < clusterPatchBase; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
@@ -716,10 +773,82 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
 			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
 		}
+		configPatches[i] = patch
+	}
+
+	// Praxis: CLUSTER ADD patches (pre then post). DestinationRule does not apply
+	// to these custom cluster names — keep TLS SNI + STRICT_DNS host in sync here.
+	if useDedicatedClusters {
+		clusterDefs := []struct {
+			name string
+			host string
+		}{
+			{beforeCluster, beforeHost},
+			{afterCluster, afterHost},
+		}
+		for i, def := range clusterDefs {
+			idx := clusterPatchBase + i
+			patch, ok := configPatches[idx].(map[string]any)
+			if !ok {
+				return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", idx)
+			}
+			if err := patchExtProcClusterAdd(patch, def.name, def.host); err != nil {
+				return fmt.Errorf("write configPatches[%d] CLUSTER ADD: %w", idx, err)
+			}
+			configPatches[idx] = patch
+		}
 	}
 
 	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {
 		return fmt.Errorf("write EnvoyFilter configPatches: %w", err)
+	}
+	return nil
+}
+
+// patchExtProcClusterAdd rewrites a CLUSTER ADD patch's cluster name, SNI, and
+// STRICT_DNS upstream address for the current gateway namespace / tenant.
+func patchExtProcClusterAdd(patch map[string]any, clusterName, host string) error {
+	if err := unstructured.SetNestedField(patch, clusterName, "patch", "value", "name"); err != nil {
+		return fmt.Errorf("cluster name: %w", err)
+	}
+	if err := unstructured.SetNestedField(patch, clusterName, "patch", "value", "load_assignment", "cluster_name"); err != nil {
+		return fmt.Errorf("load_assignment.cluster_name: %w", err)
+	}
+	if err := unstructured.SetNestedField(patch, host, "patch", "value", "transport_socket", "typed_config", "sni"); err != nil {
+		return fmt.Errorf("tls sni: %w", err)
+	}
+	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
+	if err != nil {
+		return fmt.Errorf("read endpoints: %w", err)
+	}
+	if !found || len(endpoints) == 0 {
+		return errors.New("load_assignment.endpoints missing")
+	}
+	ep0, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("endpoints[0] is not an object")
+	}
+	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	if err != nil {
+		return fmt.Errorf("read lb_endpoints: %w", err)
+	}
+	if !found || len(lbEndpoints) == 0 {
+		return errors.New("lb_endpoints missing")
+	}
+	lb0, ok := lbEndpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("lb_endpoints[0] is not an object")
+	}
+	if err := unstructured.SetNestedField(lb0, host, "endpoint", "address", "socket_address", "address"); err != nil {
+		return fmt.Errorf("socket_address.address: %w", err)
+	}
+	lbEndpoints[0] = lb0
+	if err := unstructured.SetNestedSlice(ep0, lbEndpoints, "lb_endpoints"); err != nil {
+		return fmt.Errorf("write lb_endpoints: %w", err)
+	}
+	endpoints[0] = ep0
+	if err := unstructured.SetNestedSlice(patch, endpoints, "patch", "value", "load_assignment", "endpoints"); err != nil {
+		return fmt.Errorf("write endpoints: %w", err)
 	}
 	return nil
 }
@@ -764,12 +893,86 @@ func patchPayloadProcessingNetworkPolicy(log logr.Logger, r *unstructured.Unstru
 		return fmt.Errorf("write NetworkPolicy podSelector: %w", err)
 	}
 
-	// Keep the ingress peer selector from the base manifest / ODH overlay
-	// (gateway.istio.io/managed). OpenShift managed ingress rejects NetworkPolicies
-	// in openshift-ingress that match on gateway.networking.k8s.io/gateway-name.
-	log.V(4).Info("Configured payload-processing NetworkPolicy podSelector",
-		"tenantInstances", tenantInstances)
+	// Rewrite the ext_proc ingress peer to match Istio-managed gateway pods in
+	// GatewayNamespace. The base manifest hardcodes openshift-ingress, and
+	// kustomize includeSelectors can pollute from[].podSelector with
+	// payload-processing labels (gateway pods do not have those).
+	// Keep only gateway.istio.io/managed — OpenShift managed ingress rejects
+	// NetworkPolicies in openshift-ingress that match on gateway-name.
+	if params.GatewayNamespace != "" {
+		if err := patchNetworkPolicyExtProcPeer(r, params.GatewayNamespace); err != nil {
+			return fmt.Errorf("write NetworkPolicy ext_proc ingress peer: %w", err)
+		}
+	}
+
+	log.V(4).Info("Configured payload-processing NetworkPolicy",
+		"tenantInstances", tenantInstances,
+		"gatewayNamespace", params.GatewayNamespace)
 	return nil
+}
+
+// patchNetworkPolicyExtProcPeer sets ingress[0].from[0] to allow gateway pods
+// in the given namespace. Leaves monitoring rules untouched.
+func patchNetworkPolicyExtProcPeer(r *unstructured.Unstructured, gatewayNamespace string) error {
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil {
+		return err
+	}
+	if !found || len(ingress) == 0 {
+		return nil
+	}
+	rule, ok := ingress[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	rule["from"] = []any{
+		map[string]any{
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"kubernetes.io/metadata.name": gatewayNamespace,
+				},
+			},
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"gateway.istio.io/managed": "istio.io-gateway-controller",
+				},
+			},
+		},
+	}
+	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchNetworkPolicyIngressNamespace sets kubernetes.io/metadata.name on the
+// namespaceSelector of ingress[ruleIndex].from[0]. Leaves podSelector and other
+// rules (e.g. monitoring) untouched.
+func patchNetworkPolicyIngressNamespace(r *unstructured.Unstructured, ruleIndex int, namespace string) error {
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil {
+		return err
+	}
+	if !found || ruleIndex < 0 || ruleIndex >= len(ingress) {
+		return nil
+	}
+	rule, ok := ingress[ruleIndex].(map[string]any)
+	if !ok {
+		return nil
+	}
+	from, ok := rule["from"].([]any)
+	if !ok || len(from) == 0 {
+		return nil
+	}
+	peer, ok := from[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	nsSelector["matchLabels"] = map[string]any{
+		"kubernetes.io/metadata.name": namespace,
+	}
+	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
 }
 
 // replaceHostNamespace replaces the second segment of a dot-separated FQDN.

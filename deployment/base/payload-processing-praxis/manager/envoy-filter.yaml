@@ -33,15 +33,17 @@ spec:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             failure_mode_allow: true
             allow_mode_override: true
+            # BUFFERED: current Praxis stub filters reject FULL_DUPLEX_STREAMED
+            # (Envoy "spurious response message" / "no request headers").
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
+              request_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
     - applyTo: HTTP_FILTER
@@ -64,13 +66,13 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
-              request_trailer_mode: "SEND"
-              response_trailer_mode: "SEND"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "BUFFERED"
+              request_trailer_mode: "SKIP"
+              response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-processing-extproc
               timeout: 300s
             message_timeout: 300s
     # Istio 1.26–1.29 Kuadrant WasmPlugin (typo fixed).
@@ -94,12 +96,12 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
+              request_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
     - applyTo: HTTP_FILTER
@@ -122,13 +124,13 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
-              request_trailer_mode: "SEND"
-              response_trailer_mode: "SEND"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "BUFFERED"
+              request_trailer_mode: "SKIP"
+              response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-processing-extproc
               timeout: 300s
             message_timeout: 300s
     # Istio ≥1.30 Kuadrant auth via TrafficExtension-translated WasmPlugin.
@@ -152,12 +154,12 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
+              request_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
     - applyTo: HTTP_FILTER
@@ -180,13 +182,13 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
-              request_trailer_mode: "SEND"
-              response_trailer_mode: "SEND"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "BUFFERED"
+              request_trailer_mode: "SKIP"
+              response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-processing-extproc
               timeout: 300s
             message_timeout: 300s
     # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one
@@ -211,12 +213,12 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "NONE"
-              request_trailer_mode: "SEND"
+              request_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-pre-processing-extproc
               timeout: 300s
             message_timeout: 300s
     - applyTo: HTTP_FILTER
@@ -239,13 +241,13 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
-              request_trailer_mode: "SEND"
-              response_trailer_mode: "SEND"
+              request_body_mode: "BUFFERED"
+              response_body_mode: "BUFFERED"
+              request_trailer_mode: "SKIP"
+              response_trailer_mode: "SKIP"
             grpc_service:
               envoy_grpc:
-                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+                cluster_name: payload-processing-extproc
               timeout: 300s
             message_timeout: 300s
     # Disable ext_proc on all non-inference maas-api routes.
@@ -320,3 +322,73 @@ spec:
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
+
+    # Dedicated ExtProc upstream clusters (no istio.metadata_exchange). Istio's
+    # outbound|* clusters inject MX, which non-mesh Praxis rejects as HTTP/2
+    # protocol_error and surfaces as an empty gateway 500.
+    - applyTo: CLUSTER
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: payload-pre-processing-extproc
+          type: STRICT_DNS
+          connect_timeout: 10s
+          lb_policy: ROUND_ROBIN
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http2_protocol_options: {}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: payload-pre-processing.openshift-ingress.svc.cluster.local
+              common_tls_context:
+                alpn_protocols: ["h2"]
+                validation_context:
+                  trust_chain_verification: ACCEPT_UNTRUSTED
+          load_assignment:
+            cluster_name: payload-pre-processing-extproc
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: payload-pre-processing.openshift-ingress.svc.cluster.local
+                          port_value: 9004
+    - applyTo: CLUSTER
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: payload-processing-extproc
+          type: STRICT_DNS
+          connect_timeout: 10s
+          lb_policy: ROUND_ROBIN
+          typed_extension_protocol_options:
+            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+              explicit_http_config:
+                http2_protocol_options: {}
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: payload-processing.openshift-ingress.svc.cluster.local
+              common_tls_context:
+                alpn_protocols: ["h2"]
+                validation_context:
+                  trust_chain_verification: ACCEPT_UNTRUSTED
+          load_assignment:
+            cluster_name: payload-processing-extproc
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: payload-processing.openshift-ingress.svc.cluster.local
+                          port_value: 9004

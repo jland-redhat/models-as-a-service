@@ -293,6 +293,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, fmt.Sprintf("%s.%s.svc.cluster.local", PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace), payloadHost)
+	payloadSNI, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "trafficPolicy", "tls", "sni")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, payloadHost, payloadSNI)
 
 	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingDeploymentName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
@@ -300,6 +304,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, fmt.Sprintf("%s.%s.svc.cluster.local", PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace), preProcessingHost)
+	preProcessingSNI, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "trafficPolicy", "tls", "sni")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, preProcessingHost, preProcessingSNI)
 
 	payloadService := requireResource(t, resources, GVKService, PayloadProcessingServiceName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
@@ -325,37 +333,40 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
-	// Verify dual-stage filter chain with dual anchors:
-	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
-	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
+	// Verify multi-version auth anchors + RHCL fallback:
+	//   [0..7] INSERT pairs for ≤1.25 typo, 1.26–1.29 wasmplugin, ≥1.30
+	//   trafficextension, and RHCL envoy.filters.http.wasm;
+	//   [8..11] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 8, "expected eight configPatches (4x filter insert + 4x MERGE)")
+	require.Len(t, configPatches, 12, "expected twelve configPatches (8x filter insert + 4x MERGE)")
 
-	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantAnchors := kuadrantAuthFilterAnchors(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
-	wantAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
+	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
 
-	for i, raw := range configPatches[:4] {
+	for i, raw := range configPatches[:8] {
 		cp, ok := raw.(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
 		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
-		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
+		assert.Equal(t, wantOps[i%2], op, "configPatches[%d] operation", i)
 
 		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-		assert.Equal(t, wantAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
+		assert.Equal(t, wantAnchors[i/2], anchor, "configPatches[%d] subFilter.name", i)
 
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
+		wantCluster := wantBeforeCluster
+		if i%2 == 1 {
+			wantCluster = wantAfterCluster
+		}
+		assert.Equal(t, wantCluster, cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
 	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
-	for i := 4; i < 8; i++ {
+	for i := 8; i < 12; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -363,7 +374,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, "MERGE", op, "configPatches[%d] operation", i)
 
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
-		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-4)
+		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-8)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
 		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
@@ -383,6 +394,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
 	assert.Equal(t, PayloadPreProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadBeforeDeployment, LabelTenantInstance))
 	assertDeploymentSelectorLabelAbsent(t, payloadBeforeDeployment, LabelTenantInstance)
+	// Pre-processing is data-plane only; DISABLE_EXTERNAL_MODEL_CONTROLLER must always be true.
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 
 	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingServiceName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
@@ -406,6 +419,29 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	matchExpressions, ok := podSelector["matchExpressions"].([]any)
 	require.True(t, ok)
 	require.NotEmpty(t, matchExpressions)
+	payloadIngress, found, err := unstructured.NestedSlice(payloadNetworkPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, payloadIngress)
+	payloadExtProcRule, ok := payloadIngress[0].(map[string]any)
+	require.True(t, ok)
+	payloadFrom, ok := payloadExtProcRule["from"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, payloadFrom)
+	payloadPeer, ok := payloadFrom[0].(map[string]any)
+	require.True(t, ok)
+	payloadNSSelector, ok := payloadPeer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	payloadNSMatchLabels, ok := payloadNSSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.GatewayNamespace, payloadNSMatchLabels["kubernetes.io/metadata.name"],
+		"ext_proc ingress must allow gateway pods from GatewayNamespace, not the base openshift-ingress placeholder")
+	payloadPodSelector, ok := payloadPeer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	payloadPodMatchLabels, ok := payloadPodSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, map[string]any{"gateway.istio.io/managed": "istio.io-gateway-controller"}, payloadPodMatchLabels,
+		"ext_proc ingress podSelector must not include payload-processing labels polluted by kustomize includeSelectors")
 
 	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
 	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
@@ -516,9 +552,16 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+	// Pre-processing is data-plane only; DISABLE_EXTERNAL_MODEL_CONTROLLER must always be true.
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadBeforeDeployment, PayloadPreProcessingName, "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
+	t.Helper()
+	return renderOverlayResourcesFrom(t, appNamespace, "odh")
+}
+
+func renderOverlayResourcesFrom(t *testing.T, appNamespace, overlay string) []unstructured.Unstructured {
 	t.Helper()
 
 	_, currentFile, _, ok := runtime.Caller(0)
@@ -527,13 +570,94 @@ func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Un
 	overlayDir := filepath.Clean(filepath.Join(
 		filepath.Dir(currentFile),
 		"..", "..", "..", "..",
-		"maas-api", "deploy", "overlays", "odh",
+		"maas-api", "deploy", "overlays", overlay,
 	))
 
 	resources, err := RenderKustomize(overlayDir, appNamespace)
 	require.NoError(t, err)
 
 	return resources
+}
+
+func TestApplyPlatformParamsPraxisExtProcClusters(t *testing.T) {
+	resources := renderOverlayResourcesFrom(t, "tenant-ns", "odh-praxis")
+	params := PlatformParams{
+		AppNamespace:          "tenant-ns",
+		ControllerNamespace:   "controller-ns",
+		GatewayNamespace:      "gateway-ns",
+		GatewayName:           "custom-gateway",
+		ClusterAudience:       "openshift-custom",
+		SubscriptionNamespace: "tenant-ns",
+		MaaSAPIImage:          "quay.io/example/maas-api:test",
+		PayloadProcessingImage: "praxis-extproc:dev",
+		MaaSAPIKeyCleanupImage: "quay.io/example/cleanup:test",
+		APIKeyMaxExpirationDays: "45",
+	}
+
+	require.NoError(t, applyPlatformParams(logr.Discard(), resources, params))
+
+	tenantID := params.TenantIdentifier
+	ef := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(tenantID))
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 14, "praxis EnvoyFilter needs CLUSTER ADD patches")
+
+	wantBefore := extProcClusterName(PayloadPreProcessingDeploymentName(tenantID))
+	wantAfter := extProcClusterName(PayloadProcessingDeploymentName(tenantID))
+	wantBeforeHost := fmt.Sprintf("%s.%s.svc.cluster.local", PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace)
+	wantAfterHost := fmt.Sprintf("%s.%s.svc.cluster.local", PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace)
+
+	for i, raw := range configPatches[:8] {
+		cp := raw.(map[string]any)
+		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+		want := wantBefore
+		if i%2 == 1 {
+			want = wantAfter
+		}
+		assert.Equal(t, want, cluster, "configPatches[%d] cluster", i)
+		assert.NotContains(t, cluster, "outbound|", "praxis must not use Istio outbound clusters (MX)")
+	}
+
+	for i, want := range []struct {
+		cluster string
+		host    string
+	}{
+		{wantBefore, wantBeforeHost},
+		{wantAfter, wantAfterHost},
+	} {
+		idx := 12 + i
+		cp := configPatches[idx].(map[string]any)
+		applyTo, _, _ := unstructured.NestedString(cp, "applyTo")
+		assert.Equal(t, "CLUSTER", applyTo)
+		name, _, _ := unstructured.NestedString(cp, "patch", "value", "name")
+		assert.Equal(t, want.cluster, name)
+		sni, _, _ := unstructured.NestedString(cp, "patch", "value", "transport_socket", "typed_config", "sni")
+		assert.Equal(t, want.host, sni)
+
+		endpoints, found, err := unstructured.NestedSlice(cp, "patch", "value", "load_assignment", "endpoints")
+		require.NoError(t, err)
+		require.True(t, found)
+		ep0 := endpoints[0].(map[string]any)
+		lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+		require.NoError(t, err)
+		require.True(t, found)
+		lb0 := lbEndpoints[0].(map[string]any)
+		addr, found, err := unstructured.NestedString(lb0, "endpoint", "address", "socket_address", "address")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, want.host, addr)
+	}
+
+	dr := requireResource(t, resources, GVKDestinationRule, PayloadProcessingDeploymentName(tenantID))
+	mode, found, err := unstructured.NestedString(dr.Object, "spec", "trafficPolicy", "tls", "mode")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "SIMPLE", mode)
+	sni, found, err := unstructured.NestedString(dr.Object, "spec", "trafficPolicy", "tls", "sni")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, fmt.Sprintf("%s.%s.svc.cluster.local", PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace), sni)
 }
 
 func requireResource(t *testing.T, resources []unstructured.Unstructured, gvk schema.GroupVersionKind, name string) *unstructured.Unstructured {

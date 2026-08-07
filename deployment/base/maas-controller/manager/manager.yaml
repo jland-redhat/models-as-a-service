@@ -56,6 +56,9 @@ spec:
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
             value: "ai-tenants"
+          # IPP stack: llm-d (default) or praxis. Selects maas-api/deploy/overlays/*-praxis.
+          - name: MAAS_IPP_PROFILE
+            value: "praxis"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
@@ -66,6 +69,12 @@ spec:
             valueFrom:
               configMapKeyRef:
                 key: payload-processing-image
+                name: maas-parameters
+                optional: true
+          - name: RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: praxis-extproc-image
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE

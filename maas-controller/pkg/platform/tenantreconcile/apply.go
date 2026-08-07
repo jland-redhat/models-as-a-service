@@ -121,7 +121,60 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 		return false
 	}
 	ann := live.GetAnnotations()
-	return ann != nil && ann[AnnotationManaged] == "false"
+	if ann == nil || ann[AnnotationManaged] != "false" {
+		return false
+	}
+	// IPP profile flips change ConfigMap data keys (llm-d vs praxis). Re-apply
+	// once so the stack is not stuck on the previous profile's plugin files.
+	if isPayloadProcessingPluginsConfigMap(rendered) && pluginsConfigMapDataKeysDiffer(live, rendered) {
+		ctrl.LoggerFrom(ctx).Info("Re-applying unmanaged payload-processing-plugins ConfigMap after data key change",
+			"name", rendered.GetName(), "namespace", rendered.GetNamespace())
+		return false
+	}
+	return true
+}
+
+// pluginsConfigMapDataKeysDiffer reports whether live and rendered plugins
+// ConfigMaps expose different .data keys (order-independent).
+func pluginsConfigMapDataKeysDiffer(live, rendered *unstructured.Unstructured) bool {
+	return !stringSetEqual(configMapDataKeys(live), configMapDataKeys(rendered))
+}
+
+func configMapDataKeys(u *unstructured.Unstructured) []string {
+	if u == nil {
+		return nil
+	}
+	data, _, err := unstructured.NestedStringMap(u.Object, "data")
+	if err != nil || len(data) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+func stringSetEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, k := range a {
+		counts[k]++
+	}
+	for _, k := range b {
+		counts[k]--
+		if counts[k] < 0 {
+			return false
+		}
+	}
+	for _, n := range counts {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // isPayloadProcessingPluginsConfigMap reports whether u is the IPP plugins ConfigMap

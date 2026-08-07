@@ -1221,13 +1221,11 @@ func main() {
 	//   5. LifecycleReconciler patches Config→AITenant/MaasTenantConfig owner refs.
 	//   6. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
-	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
-	if manifestPath == "" {
-		// tlsConfig.available reflects whether config.openshift.io API exists,
-		// which is the authoritative signal for OCP vs vanilla Kubernetes.
-		isOCP := tlsConfig.available
-		manifestPath = tenantreconcile.ManifestPathForPlatform(isOCP)
-	}
+	// tlsConfig.available reflects whether config.openshift.io API exists,
+	// which is the authoritative signal for OCP vs vanilla Kubernetes.
+	// ManifestPathForPlatform also honors MAAS_PLATFORM_MANIFESTS and remaps
+	// stock odh/xks paths when MAAS_IPP_PROFILE=praxis.
+	manifestPath := tenantreconcile.ManifestPathForPlatform(tlsConfig.available)
 	if abs, err := filepath.Abs(manifestPath); err == nil {
 		manifestPath = abs
 	}

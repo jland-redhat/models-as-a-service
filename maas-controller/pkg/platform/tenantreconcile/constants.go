@@ -60,8 +60,18 @@ const (
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-	DefaultAPIKeyMaxExpirationDays = "90"
+	// DefaultPraxisPayloadProcessingImage is used when MAAS_IPP_PROFILE=praxis
+	// and RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE is unset.
+	DefaultPraxisPayloadProcessingImage = "quay.io/maas/praxis-extproc:dev-crypto-fix"
+	DefaultMaaSAPIKeyCleanupImage       = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays      = "90"
+
+	// EnvIPPProfile selects the IPP kustomize base: "llm-d" (default) or "praxis".
+	EnvIPPProfile = "MAAS_IPP_PROFILE"
+	// IPPProfileLLMD is the legacy ai-gateway-payload-processing stack.
+	IPPProfileLLMD = "llm-d"
+	// IPPProfilePraxis is the Praxis extproc stack.
+	IPPProfilePraxis = "praxis"
 
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
