@@ -1,8 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Parallel Praxis-based IPP stack (inactive). Production overlays still point at
-# deployment/base/payload-processing. Wire via Config profile / overlay switch later.
+# Praxis ExtProc IPP stack (selected via MAAS_IPP_PROFILE=praxis → odh-praxis overlay).
+# Resource names match llm-d payload-processing so the shared reconciler patchers apply;
+# maas.opendatahub.io/ipp-profile=praxis marks them as the Praxis implementation.
 resources:
   - ../manager
   - ../rbac
@@ -14,3 +15,6 @@ labels:
       app.kubernetes.io/part-of: models-as-a-service
       app.kubernetes.io/component: payload-processing
       app.kubernetes.io/name: payload-processing
+
+commonAnnotations:
+  maas.opendatahub.io/ipp-profile: praxis

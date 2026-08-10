@@ -13,14 +13,41 @@ Cluster used for the install attempt:
 
 ---
 
+## Resource names (important)
+
+Praxis **reuses** the same Kubernetes resource names as llm-d so the shared
+reconciler patchers apply with no profile-specific naming code. Tell them apart
+with the annotation:
+
+```text
+maas.opendatahub.io/ipp-profile: praxis
+```
+
+| Kind | Name (both profiles) | How to tell Praxis |
+|------|----------------------|--------------------|
+| Deployment / Service / EnvoyFilter / SA / NetworkPolicy | `payload-processing` | annotation `ipp-profile=praxis` |
+| Pre-auth Deployment / Service | `payload-pre-processing` | same annotation |
+| Plugins ConfigMap | `payload-processing-plugins` | same annotation |
+| ClusterRole / Binding | `payload-processing-reader` | same annotation |
+| Manifest directory | `deployment/base/payload-processing-praxis/` | vs `.../payload-processing/` |
+
+Envoy dedicated cluster names (Praxis EnvoyFilter CLUSTER ADD, MX-free):
+`payload-processing-extproc`, `payload-pre-processing-extproc`.
+
+Container / image stub stays `praxis-extproc` (image rename only); K8s object
+names stay `payload-processing*`.
+
+---
+
 ## What changed in this repo
 
 ### New manifests
 - `deployment/base/payload-processing-praxis/` — Praxis ExtProc Deployment,
   Service, DestinationRule (SNI), EnvoyFilter (MX-free clusters), plugins
-  ConfigMap stubs, NetworkPolicy, RBAC, pre-processing clone
+  ConfigMap stubs, NetworkPolicy, RBAC, pre-processing clone. Annotated
+  `maas.opendatahub.io/ipp-profile: praxis` via `commonAnnotations`.
 - `maas-api/deploy/overlays/odh-praxis/` — same as `overlays/odh`, but points at
-  the Praxis IPP base (RHOAI/OCP path)
+  the Praxis base (RHOAI/OCP path)
 
 **Not added:** any `xks` / `xks-praxis` overlays (explicitly out of scope).
 
@@ -29,38 +56,32 @@ Cluster used for the install attempt:
 - Related image: `RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE` ← ConfigMap key
   `praxis-extproc-image`
 - Path remapping: stock `.../overlays/odh` → `.../overlays/odh-praxis` when
-  profile is praxis (also remaps stock `MAAS_PLATFORM_MANIFESTS` values)
-- Go updates under `maas-controller/pkg/platform/tenantreconcile/` and
-  `maas-controller/cmd/manager/main.go`
+  profile is praxis
+- Resource names are **not** profile-aware; only overlay path + image + Envoy
+  cluster style differ
 - EnvoyFilter patcher supports 8 auth-anchor HTTP_FILTER patches + Praxis
-  dedicated clusters (`payload-*-extproc`) instead of Istio `outbound|*`
+  dedicated clusters (`service + "-extproc"`)
 - Plugins ConfigMap: re-apply when data keys change (llm-d ↔ praxis) even if
   `opendatahub.io/managed=false`
 
 ### Build / params / deploy wiring
-- Dockerfiles COPY `payload-processing-praxis`
-- `praxis-extproc-image` in `deployment/overlays/odh/params.env` and
-  maas-controller `params.env` files
+- Dockerfiles COPY `deployment/base/payload-processing-praxis`
+- `praxis-extproc-image` in params.env files
 - Legacy `payload-processing` EnvoyFilter expanded for multi-Istio auth anchors
-  (needed so `llm-d` still works with `filterPatchCount=8`)
-- `scripts/deploy.sh`:
-  - writes `praxis-extproc-image` into `maas-parameters`
-  - skips cert-manager subscription re-apply when cert-manager pods already run
-    (avoids TooManyOperatorGroups)
+- `scripts/deploy.sh` writes `praxis-extproc-image` into `maas-parameters` and
+  skips cert-manager re-apply when already running
 
 ### OpenShift SCC fix
-- Removed hardcoded `runAsUser` / `runAsGroup: 65534` from the Praxis Deployment
-  (restricted-v2 rejects fixed UIDs outside the namespace range)
+- No hardcoded `runAsUser` / `runAsGroup: 65534` on Praxis Deployments
 
-### Images built and pushed during the experiment
+### Images built during the experiment
 | Image | Tag / notes |
 |-------|-------------|
-| `quay.io/maas/praxis-extproc` | `:dev-crypto-fix` (usable); `:dev` had a rustls crash |
-| `quay.io/maas/maas-controller` | `:praxis-dev` (embeds Praxis manifests) |
+| `quay.io/maas/praxis-extproc` | `:dev-crypto-fix` |
+| `quay.io/maas/maas-controller` | `:praxis-dev` |
 
-ExtProc source used for the build: [szedan-rh/extproc](https://github.com/szedan-rh/extproc)
-(fork of praxis-proxy/extproc). Local fix: pin rustls `ring` CryptoProvider and
-call `install_default()` at process start.
+ExtProc source: [szedan-rh/extproc](https://github.com/szedan-rh/extproc)
+with a local rustls CryptoProvider fix.
 
 ---
 
@@ -69,89 +90,43 @@ call `install_default()` at process start.
 ```text
 MAAS_IPP_PROFILE=praxis
   → ManifestPathForPlatform → /maas-api/deploy/overlays/odh-praxis
-  → payload-processing-praxis base
-  → RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE for Deployment image
+  → deployment/base/payload-processing-praxis
+  → RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE
+  → K8s resources named payload-processing* + annotation ipp-profile=praxis
 ```
-
-Manager Deployment currently defaults `MAAS_IPP_PROFILE` to `praxis` in this
-branch for the RHOAI experiment (upstream praxis branch defaults to `llm-d`).
 
 ---
 
 ## Issues faced (and outcomes)
 
 ### 1. Kubeconfig `~` not expanded
-`oc login --kubeconfig=~/.kube/config.praxis` wrote a **literal**
-`maas-billing/~/.kube/config.praxis` under the repo. Always use an absolute path:
-`--kubeconfig=/home/jland/.kube/config.praxis`.
+Use absolute `--kubeconfig=/home/jland/.kube/config.praxis`.
 
 ### 2. Full `./scripts/deploy.sh --operator-type rhoai` on this pool
-This cluster already runs RHOAI from catalog `rhoai-catalog-dev` /
-subscription `rhoai-operator-dev`. Deploy tried to add a second
-`rhods-operator` subscription from `redhat-operators` → OLM constraint
-failures. The conflicting sub was deleted; controller was installed via the
-direct/FORCE path instead.
+Conflicts with existing `rhoai-catalog-dev` / `rhoai-operator-dev` subscription.
+Prefer surgical controller install + DSC enablement.
 
 ### 3. cert-manager OperatorGroup conflict
-Re-applying the cert-manager subscription created a second OperatorGroup
-(`TooManyOperatorGroups`). Mitigated by skipping cert-manager apply when pods
-are already Running.
+Mitigated by skipping cert-manager apply when pods already run.
 
 ### 4. AIGateway reconciler overwrites maas-controller image
-OwnerRef is `AIGateway/default-aigateway`. Custom
-`quay.io/maas/maas-controller:praxis-dev` was reverted to the product
-`registry.redhat.io/rhoai/odh-maas-controller-rhel9@sha256:...` until
-`opendatahub.io/managed=false` was set on the Deployment.
+Needed `opendatahub.io/managed=false` on the Deployment for custom images.
 
 ### 5. OpenShift SCC vs `runAsUser: 65534`
-Praxis pods failed to create (`restricted-v2` UID range). Fixed by dropping
-hardcoded UIDs from the Praxis Deployment YAML.
+Fixed by dropping hardcoded UIDs.
 
-### 6. rustls CryptoProvider panic in ExtProc
-First image crashed on TLS self-signed cert generation. Fixed in the ExtProc
-build (ring provider) and pushed as a **new tag** (`dev-crypto-fix`).
+### 6. rustls CryptoProvider panic
+Fixed in ExtProc build; use unique image tags (`dev-crypto-fix`).
 
-### 7. ImagePullPolicy + tag reuse
-`:dev` + `IfNotPresent` left nodes on the broken digest after the crypto fix.
-Use unique tags when iterating.
+### 7. Shared names with llm-d IPP
+Kept shared `payload-processing*` names (old approach). Distinguish Praxis with
+`maas.opendatahub.io/ipp-profile=praxis` on the manifests.
 
 ### 8. Validation: API key mint still fails
-`./scripts/validate-deployment.sh` → **9 pass / 1 fail / 2 warnings**.
+Missing `X-MaaS-Username` — Authorino identity headers; not fixed.
 
-Fail: create API key → missing `X-MaaS-Username` (Authorino identity headers
-not reaching maas-api). `GET /maas-api/v1/models` returned 200 with an empty
-list. Likely AuthPolicy / wasm filter-chain interaction with the new
-multi-anchor EnvoyFilter — **not fixed**.
-
-### 9. Feature gap (expected)
-Praxis plugins ConfigMap is stub-only (`request_id`, `model_to_header`). No
-parity with llm-d translation / apikey inject / provider resolve yet.
-
-### 10. No models on the cluster
-Inference paths were not validated (no LLM namespace / models).
-
----
-
-## Cluster end state (at time of write-up)
-
-| Component | State |
-|-----------|--------|
-| DSC `aigateway` + `modelsAsAService` | Managed |
-| `maas-controller` | Custom image `praxis-dev`, `MAAS_IPP_PROFILE=praxis`, often `opendatahub.io/managed=false` |
-| `payload-processing` / `payload-pre-processing` | Running Praxis ExtProc (`dev-crypto-fix`) |
-| EnvoyFilter | MX-free clusters `payload-*-extproc` |
-| Validation | Gateway/policies OK; API key mint failing |
-
----
-
-## Suggested next steps
-
-1. Fix Authorino → `X-MaaS-Username` / `X-MaaS-Group` injection with the Praxis EF chain.
-2. Decide default profile (`llm-d` vs `praxis`) before merging; keep both selectable.
-3. Wire parent-operator / CSV `RELATED_IMAGE_*` (and `praxis-extproc-image`) so AIGateway does not fight local images.
-4. Upstream the rustls CryptoProvider fix into the ExtProc repo; publish a stable Quay tag.
-5. Replace stub Praxis filters with real IPP/BBR behavior before claiming feature parity.
-6. Re-test with a real model; avoid full `deploy.sh` operator install on pools that already use a custom RHOAI catalog—prefer surgical controller + DSC enablement.
+### 9. Feature gap
+Praxis plugins ConfigMap is stub-only (`request_id`, `model_to_header`).
 
 ---
 
@@ -160,15 +135,13 @@ Inference paths were not validated (no LLM namespace / models).
 ```bash
 export KUBECONFIG=/home/jland/.kube/config.praxis
 
-# Build ExtProc (from cloned szedan-rh/extproc)
-podman build --platform=linux/amd64 -t quay.io/maas/praxis-extproc:dev-crypto-fix -f Containerfile .
-podman push quay.io/maas/praxis-extproc:dev-crypto-fix
+# Shared names — filter by Praxis annotation:
+oc get deploy,svc,envoyfilter,cm,sa,networkpolicy -n openshift-ingress \
+  -l app.kubernetes.io/name=payload-processing \
+  -o custom-columns=KIND:.kind,NAME:.metadata.name,PROFILE:.metadata.annotations.maas\.opendatahub\.io/ipp-profile
 
-# Build controller (repo root)
-podman build --platform=linux/amd64 -t quay.io/maas/maas-controller:praxis-dev \
-  -f maas-controller/Dockerfile .
-podman push quay.io/maas/maas-controller:praxis-dev
+oc get deploy payload-processing payload-pre-processing -n openshift-ingress \
+  -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.annotations.maas\.opendatahub\.io/ipp-profile}{"\t"}{.spec.template.spec.containers[0].image}{"\n"}{end}'
 
-# Validate
 ./scripts/validate-deployment.sh
 ```

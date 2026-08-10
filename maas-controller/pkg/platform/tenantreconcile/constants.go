@@ -90,12 +90,20 @@ const (
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 
-	// Base IPP resource names in kustomize manifests. Per-tenant deployments suffix
-	// these with "-{tenantID}" (default tenant keeps unsuffixed names).
+	// Base IPP resource names in kustomize manifests. Shared by llm-d and Praxis
+	// profiles so the same reconciler patchers apply. Distinguish implementations
+	// with AnnotationIPPProfile (set on Praxis manifests via commonAnnotations).
+	// Per-tenant deployments suffix these with "-{tenantID}" (default tenant keeps
+	// unsuffixed names).
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+
+	// AnnotationIPPProfile marks which IPP implementation owns a resource.
+	// Praxis bases set this to IPPProfilePraxis; llm-d leaves it unset/absent.
+	AnnotationIPPProfile = "maas.opendatahub.io/ipp-profile"
+
 	// PayloadProcessingEnvoyFilterPriority runs after Kuadrant's default-priority (0)
 	// EnvoyFilter so RHCL's envoy.filters.http.wasm anchor exists when we INSERT_*.
 	PayloadProcessingEnvoyFilterPriority int64 = 10

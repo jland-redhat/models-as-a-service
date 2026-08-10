@@ -6,6 +6,7 @@ metadata:
 
 # Same as overlays/odh, but uses the Praxis IPP base.
 # Selected when maas-controller has MAAS_IPP_PROFILE=praxis.
+# Resources keep payload-processing names; annotated maas.opendatahub.io/ipp-profile=praxis.
 resources:
 - ../../../../deployment/base/maas-api/overlays/tls
 - ../../../../deployment/base/maas-controller/policies

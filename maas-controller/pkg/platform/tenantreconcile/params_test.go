@@ -580,6 +580,7 @@ func renderOverlayResourcesFrom(t *testing.T, appNamespace, overlay string) []un
 }
 
 func TestApplyPlatformParamsPraxisExtProcClusters(t *testing.T) {
+	t.Setenv("MAAS_IPP_PROFILE", "praxis")
 	resources := renderOverlayResourcesFrom(t, "tenant-ns", "odh-praxis")
 	params := PlatformParams{
 		AppNamespace:          "tenant-ns",
