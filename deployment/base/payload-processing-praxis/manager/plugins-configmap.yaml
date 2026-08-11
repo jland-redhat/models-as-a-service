@@ -24,7 +24,11 @@ data:
             header: X-Gateway-Model-Name
     insecure_options:
       allow_unbounded_body: true
-  # Stub IPP (post-auth) Praxis chain. Iterate as Praxis filters land.
+  # IPP (post-auth) Praxis chain. Iterate as Praxis filters land.
+  # llmisvc_model_provider_resolver ports the LLMISvc / KServe BBR body-rewrite
+  # branch: when X-Gateway-Model-Name (set by pre model_to_header) is a publisher
+  # ID (publishers/.../models/<name>), rewrite body "model" to <name> only.
+  # The routing header is left unchanged so KServe can still route on the ID.
   extproc.yaml: |
     server:
       grpc_address: "0.0.0.0:9004"
@@ -36,6 +40,8 @@ data:
       - name: ipp
         filters:
           - filter: request_id
-          # TODO: translation / apikey / provider resolve as Praxis filters land
+          - filter: llmisvc_model_provider_resolver
+            header: X-Gateway-Model-Name
+          # TODO: translation / apikey / ExternalModel provider resolve as Praxis filters land
     insecure_options:
       allow_unbounded_body: true

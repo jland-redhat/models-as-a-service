@@ -10,4 +10,4 @@ resources:
 images:
   - name: praxis-extproc
     newName: quay.io/maas/praxis-extproc
-    newTag: dev-crypto-fix
+    newTag: llmisvc-model-provider-resolver

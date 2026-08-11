@@ -62,7 +62,7 @@ const (
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	// DefaultPraxisPayloadProcessingImage is used when MAAS_IPP_PROFILE=praxis
 	// and RELATED_IMAGE_PRAXIS_EXTPROC_IMAGE is unset.
-	DefaultPraxisPayloadProcessingImage = "quay.io/maas/praxis-extproc:dev-crypto-fix"
+	DefaultPraxisPayloadProcessingImage = "quay.io/maas/praxis-extproc:llmisvc-model-provider-resolver"
 	DefaultMaaSAPIKeyCleanupImage       = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays      = "90"
 

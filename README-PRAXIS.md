@@ -77,7 +77,7 @@ names stay `payload-processing*`.
 ### Images built during the experiment
 | Image | Tag / notes |
 |-------|-------------|
-| `quay.io/maas/praxis-extproc` | `:dev-crypto-fix` |
+| `quay.io/maas/praxis-extproc` | `:llmisvc-model-provider-resolver` |
 | `quay.io/maas/maas-controller` | `:praxis-dev` |
 
 ExtProc source: [szedan-rh/extproc](https://github.com/szedan-rh/extproc)
@@ -116,7 +116,9 @@ Needed `opendatahub.io/managed=false` on the Deployment for custom images.
 Fixed by dropping hardcoded UIDs.
 
 ### 6. rustls CryptoProvider panic
-Fixed in ExtProc build; use unique image tags (`dev-crypto-fix`).
+Still required in ExtProc `main` (`rustls` `ring` feature +
+`CryptoProvider::install_default`). Rebuilds of
+`:llmisvc-model-provider-resolver` without that fix CrashLoop on TLS startup.
 
 ### 7. Shared names with llm-d IPP
 Kept shared `payload-processing*` names (old approach). Distinguish Praxis with
@@ -126,7 +128,10 @@ Kept shared `payload-processing*` names (old approach). Distinguish Praxis with
 Missing `X-MaaS-Username` — Authorino identity headers; not fixed.
 
 ### 9. Feature gap
-Praxis plugins ConfigMap is stub-only (`request_id`, `model_to_header`).
+Praxis plugins ConfigMap still missing translation / apikey / ExternalModel
+provider resolve. LLMISvc body rewrite is wired:
+`model_to_header` (pre) → `llmisvc_model_provider_resolver` (post) on
+`X-Gateway-Model-Name`.
 
 ---
 
