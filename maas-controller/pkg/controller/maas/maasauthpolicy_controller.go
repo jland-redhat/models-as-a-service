@@ -834,10 +834,11 @@ allow { true }`,
 			"patternMatching": map[string]any{
 				"patterns": []any{
 					map[string]any{
-						"predicate": `!has(request.headers["x-maas-username"])`,
+						// CEL has() only works on message fields; use `in` for map keys.
+						"predicate": `!("x-maas-username" in request.headers)`,
 					},
 					map[string]any{
-						"predicate": `!has(request.headers["x-maas-group"])`,
+						"predicate": `!("x-maas-group" in request.headers)`,
 					},
 				},
 			},

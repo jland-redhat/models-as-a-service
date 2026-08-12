@@ -1773,8 +1773,8 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		got = append(got, pred)
 	}
 
-	wantUsername := `!has(request.headers["x-maas-username"])`
-	wantGroup := `!has(request.headers["x-maas-group"])`
+	wantUsername := `!("x-maas-username" in request.headers)`
+	wantGroup := `!("x-maas-group" in request.headers)`
 	if got[0] != wantUsername || got[1] != wantGroup {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want [%q, %q]", got, wantUsername, wantGroup)
 	}
