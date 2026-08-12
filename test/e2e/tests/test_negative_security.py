@@ -76,11 +76,22 @@ class TestHeaderSpoofing:
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
 
-    def test_forged_identity_headers_rejected_on_key_mint(self):
-        """POST /v1/api-keys with forged X-MaaS identity headers must be denied.
+    @pytest.mark.parametrize(
+        "forged_header,label",
+        [
+            ({"X-MaaS-Username": "cluster-admin"}, "X-MaaS-Username"),
+            (
+                {"X-MaaS-Group": '["system:cluster-admins","system:masters"]'},
+                "X-MaaS-Group",
+            ),
+        ],
+        ids=["username-only", "group-only"],
+    )
+    def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
+        """POST /v1/api-keys with a forged X-MaaS identity header must be denied.
 
-        A caller with a valid OpenShift token must not mint a key as another
-        user by injecting X-MaaS-Username / X-MaaS-Group.
+        Each denied header is asserted independently so a regression that only
+        drops username or only drops group cannot hide behind a combined spoof.
 
         Under deny semantics there is no spoofed key to inspect — Authorino
         rejects before maas-api runs, so the response must not contain key
@@ -90,20 +101,23 @@ class TestHeaderSpoofing:
         oc_token = _get_cluster_token()
 
         # Prove the gateway is ready for legitimate minting first.
-        baseline = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
-        assert baseline.status_code in (200, 201), (
-            f"Baseline API key mint failed before spoof check: "
-            f"{baseline.status_code} body_bytes={len(baseline.content)}"
-        )
-        baseline_body = baseline.json()
-        if baseline_body.get("id"):
-            _revoke_api_key(oc_token, baseline_body["id"])
+        # Revoke even if status/JSON assertions fail.
+        baseline_key_id = None
+        try:
+            baseline = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
+            assert baseline.status_code in (200, 201), (
+                f"Baseline API key mint failed before spoof check: "
+                f"{baseline.status_code} body_bytes={len(baseline.content)}"
+            )
+            baseline_key_id = baseline.json().get("id")
+        finally:
+            if baseline_key_id:
+                _revoke_api_key(oc_token, baseline_key_id)
 
         spoofed_headers = {
             "Authorization": f"Bearer {oc_token}",
             "Content-Type": "application/json",
-            "X-MaaS-Username": "cluster-admin",
-            "X-MaaS-Group": '["system:cluster-admins","system:masters"]',
+            **forged_header,
         }
         url = f"{_maas_api_url()}/v1/api-keys"
         body = {
@@ -118,12 +132,13 @@ class TestHeaderSpoofing:
         # Never log response bodies from mint endpoints — a CVE regression
         # could return a live sk-oai-* key into CI logs (CWE-532).
         log.info(
-            "Forged-header key mint -> %s body_bytes=%d",
+            "Forged %s key mint -> %s body_bytes=%d",
+            label,
             r.status_code,
             len(r.content),
         )
         assert r.status_code in (401, 403), (
-            f"Expected 401/403 denying forged identity headers on key mint, "
+            f"Expected 401/403 denying forged {label} on key mint, "
             f"got {r.status_code} body_bytes={len(r.content)}"
         )
         assert "sk-oai-" not in r.text, (
@@ -167,10 +182,17 @@ class TestHeaderSpoofing:
 
         r = _poll_status(api_key, (401, 403), extra_headers=spoofed_headers, timeout=30)
 
-        log.info("Spoofed identity headers on inference -> %s", r.status_code)
+        log.info(
+            "Spoofed identity headers on inference -> %s body_bytes=%d",
+            r.status_code,
+            len(r.content),
+        )
         assert r.status_code in (401, 403), (
             f"Expected 401/403 (forged identity headers denied), "
-            f"got {r.status_code}: {r.text[:500]}"
+            f"got {r.status_code} body_bytes={len(r.content)}"
+        )
+        assert "sk-oai-" not in r.text, (
+            "Denied inference response must not contain API key material"
         )
 
     def test_duplicate_subscription_headers_ignored(self):

@@ -780,58 +780,43 @@ class TestOIDCHeaderInjection:
         )
         log.info("X-MaaS-Username injection correctly denied by gateway")
 
-    def test_injected_group_header_does_not_escalate(self, maas_api_base_url: str):
-        """Client-supplied X-MaaS-Group must not grant access to unauthorized resources.
+    def test_injected_group_header_rejected(self, maas_api_base_url: str):
+        """Client-supplied X-MaaS-Group is rejected by the gateway.
 
-        Inject a fabricated admin group and verify the request either
-        succeeds with the real groups (header overwritten) or is denied
-        (header interfered but did not grant escalated access).
-        Either outcome is safe — the critical check is that injection
-        does NOT grant broader access than the real identity.
+        Mint an API key as alice_lead, then call /v1/models with a spoofed
+        X-MaaS-Group header. deny-client-identity-headers must deny.
         """
         token = _request_oidc_token(username="alice_lead", password="letmein")
         api_key = _create_oidc_api_key(maas_api_base_url, token)["key"]
 
-        response = _oidc_request_with_retry(
-            requests.get,
+        # Unspoofed control: same credential must succeed before the deny check.
+        control = requests.get(
             f"{maas_api_base_url}/v1/models",
-            api_key,
-            label="OIDC inject X-MaaS-Group",
-            headers={"X-MaaS-Group": '["system:cluster-admins","cluster-admin"]'},
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert control.status_code == 200, (
+            f"Control /v1/models without forged headers failed: "
+            f"{control.status_code} body_bytes={len(control.content)}"
         )
 
-        # Get baseline (no injection) for comparison
-        baseline = _oidc_request_with_retry(
-            requests.get,
+        # Raw GET — empty 403 is the expected Authorino deny and must not be
+        # retried away by _oidc_request_with_retry.
+        response = requests.get(
             f"{maas_api_base_url}/v1/models",
-            api_key,
-            label="OIDC baseline (group injection test)",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-MaaS-Group": '["system:cluster-admins","cluster-admin"]',
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
         )
-        assert baseline.status_code == 200, (
-            f"Baseline request failed: {baseline.status_code} {baseline.text}"
+        assert response.status_code in (401, 403), (
+            f"Expected 401/403 (injected header denied), "
+            f"got {response.status_code} body_bytes={len(response.content)}"
         )
-
-        if response.status_code == 200:
-            # Header was overwritten — verify no extra models were returned
-            injected_models = response.json().get("data") or response.json().get("models") or []
-            baseline_models = baseline.json().get("data") or baseline.json().get("models") or []
-            injected_ids = sorted(m["id"] for m in injected_models)
-            baseline_ids = sorted(m["id"] for m in baseline_models)
-            assert injected_ids == baseline_ids, (
-                f"Injected X-MaaS-Group changed model list (possible escalation)! "
-                f"Baseline: {baseline_ids}, injected: {injected_ids}"
-            )
-            log.info("X-MaaS-Group injection overwritten — same models returned")
-        else:
-            # Header caused denial (e.g. 403) — safe, injection did not escalate
-            assert response.status_code in (400, 403), (
-                f"Unexpected status for injected group header: "
-                f"{response.status_code} {response.text}"
-            )
-            log.info(
-                f"X-MaaS-Group injection caused denial ({response.status_code}) "
-                f"— no escalation possible"
-            )
+        log.info("X-MaaS-Group injection correctly denied by gateway")
 
     def test_injected_subscription_header_ignored(self, maas_api_base_url: str):
         """Client-supplied X-MaaS-Subscription must not let a user access another subscription.
