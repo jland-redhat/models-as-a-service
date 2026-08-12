@@ -93,7 +93,7 @@ class TestHeaderSpoofing:
         baseline = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
         assert baseline.status_code in (200, 201), (
             f"Baseline API key mint failed before spoof check: "
-            f"{baseline.status_code}: {baseline.text[:500]}"
+            f"{baseline.status_code} body_bytes={len(baseline.content)}"
         )
         baseline_body = baseline.json()
         if baseline_body.get("id"):
@@ -115,25 +115,38 @@ class TestHeaderSpoofing:
         # Authorino deny and must not be treated as transient propagation.
         r = requests.post(url, headers=spoofed_headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
 
-        log.info("Forged-header key mint -> %s body=%r", r.status_code, r.text[:200])
+        # Never log response bodies from mint endpoints — a CVE regression
+        # could return a live sk-oai-* key into CI logs (CWE-532).
+        log.info(
+            "Forged-header key mint -> %s body_bytes=%d",
+            r.status_code,
+            len(r.content),
+        )
         assert r.status_code in (401, 403), (
             f"Expected 401/403 denying forged identity headers on key mint, "
-            f"got {r.status_code}: {r.text[:500]}"
+            f"got {r.status_code} body_bytes={len(r.content)}"
         )
         assert "sk-oai-" not in r.text, (
             "Denied mint response must not contain API key material"
         )
 
         # Control: same token without forged headers can still mint.
-        control = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
-        assert control.status_code in (200, 201), (
-            f"Control mint without forged headers failed: "
-            f"{control.status_code}: {control.text[:500]}"
-        )
-        control_body = control.json()
-        assert control_body.get("key", "").startswith("sk-oai-"), control_body
-        if control_body.get("id"):
-            _revoke_api_key(oc_token, control_body["id"])
+        # Revoke even if status/JSON/key-format assertions fail.
+        control_key_id = None
+        try:
+            control = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
+            assert control.status_code in (200, 201), (
+                f"Control mint without forged headers failed: "
+                f"{control.status_code} body_bytes={len(control.content)}"
+            )
+            control_body = control.json()
+            control_key_id = control_body.get("id")
+            assert control_body.get("key", "").startswith("sk-oai-"), (
+                "Control mint missing sk-oai- key prefix"
+            )
+        finally:
+            if control_key_id:
+                _revoke_api_key(oc_token, control_key_id)
 
     def test_injected_identity_headers_rejected_on_inference(self):
         """Client injects X-MaaS-Username/Group — gateway rejects the request.

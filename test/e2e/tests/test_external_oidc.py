@@ -753,6 +753,18 @@ class TestOIDCHeaderInjection:
         token = _request_oidc_token(username="alice_lead", password="letmein")
         api_key = _create_oidc_api_key(maas_api_base_url, token)["key"]
 
+        # Unspoofed control: same credential must succeed before the deny check.
+        control = requests.get(
+            f"{maas_api_base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert control.status_code == 200, (
+            f"Control /v1/models without forged headers failed: "
+            f"{control.status_code} body_bytes={len(control.content)}"
+        )
+
         response = requests.get(
             f"{maas_api_base_url}/v1/models",
             headers={
@@ -764,7 +776,7 @@ class TestOIDCHeaderInjection:
         )
         assert response.status_code in (401, 403), (
             f"Expected 401/403 (injected header denied), "
-            f"got {response.status_code}: {response.text}"
+            f"got {response.status_code} body_bytes={len(response.content)}"
         )
         log.info("X-MaaS-Username injection correctly denied by gateway")
 
@@ -878,6 +890,37 @@ class TestOIDCHeaderInjection:
         """
         token = _request_oidc_token(username="alice_lead", password="letmein")
 
+        # Unspoofed control: same OIDC token must mint successfully first.
+        control_key_id = None
+        try:
+            control = requests.post(
+                f"{maas_api_base_url}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json={"name": f"e2e-oidc-control-{uuid.uuid4().hex[:8]}"},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+            assert control.status_code in (200, 201), (
+                f"Control OIDC mint without forged headers failed: "
+                f"{control.status_code} body_bytes={len(control.content)}"
+            )
+            control_body = control.json()
+            control_key_id = control_body.get("id")
+            assert control_body.get("key", "").startswith("sk-oai-"), (
+                "Control mint missing sk-oai- key prefix"
+            )
+        finally:
+            if control_key_id:
+                _oidc_request_with_retry(
+                    requests.delete,
+                    f"{maas_api_base_url}/v1/api-keys/{control_key_id}",
+                    token,
+                    label="OIDC cleanup control mint key",
+                )
+
         # Raw POST — empty 403 is the expected Authorino deny and must not be
         # retried away by _oidc_request_with_retry.
         response = requests.post(
@@ -891,14 +934,20 @@ class TestOIDCHeaderInjection:
             timeout=30,
             verify=TLS_VERIFY,
         )
+        # Avoid dumping response bodies: a regression could return a live key.
         assert response.status_code in (401, 403), (
             f"Expected 401/403 denying forged X-MaaS-Username on key mint, "
-            f"got {response.status_code}: {response.text}"
+            f"got {response.status_code} body_bytes={len(response.content)}"
         )
         assert "sk-oai-" not in response.text, (
             "Denied mint response must not contain API key material"
         )
-        log.info("OIDC key mint with injected X-MaaS-Username correctly denied")
+        log.info(
+            "OIDC key mint with injected X-MaaS-Username correctly denied "
+            "(status=%s body_bytes=%d)",
+            response.status_code,
+            len(response.content),
+        )
 
 
 
