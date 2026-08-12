@@ -79,11 +79,10 @@ class TestHeaderSpoofing:
     def test_forged_identity_headers_rejected_on_key_mint(self):
         """POST /v1/api-keys with forged X-MaaS identity headers must be denied.
 
-        This is the CVE-2026-14450 / RHOAIENG-83213 management-path check: a
-        caller with a valid OpenShift token must not mint a key as another user
-        by injecting X-MaaS-Username / X-MaaS-Group.
+        A caller with a valid OpenShift token must not mint a key as another
+        user by injecting X-MaaS-Username / X-MaaS-Group.
 
-        Under deny semantics there is no "spoofed key" to inspect — Authorino
+        Under deny semantics there is no spoofed key to inspect — Authorino
         rejects before maas-api runs, so the response must not contain key
         material. A follow-up mint without forged headers still succeeds.
         """

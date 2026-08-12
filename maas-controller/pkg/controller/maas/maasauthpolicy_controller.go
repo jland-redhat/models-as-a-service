@@ -828,8 +828,6 @@ allow { true }`,
 	authorizationRules := map[string]any{
 		"tenant-gateway-isolation": tenantGatewayIsolationRule,
 		// Reject client-supplied identity headers; Authorino injects these after auth.
-		// Without this guard, a caller can forge X-MaaS-Username / X-MaaS-Group on
-		// requests and escalate privileges against maas-api management endpoints.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
