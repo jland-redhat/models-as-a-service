@@ -1744,6 +1744,40 @@ func TestBuildGatewayAuthPolicySpec_K8sAuth(t *testing.T) {
 	if _, exists := authz["oidc-groups-safe"]; exists {
 		t.Error("oidc-groups-safe should NOT be present when OIDC config is nil")
 	}
+	if _, exists := authz["deny-client-identity-headers"]; !exists {
+		t.Error("deny-client-identity-headers must be present to block forged X-MaaS identity headers")
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	patterns, found, err := unstructured.NestedSlice(
+		obj.Object,
+		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
+	)
+	if err != nil || !found || len(patterns) != 2 {
+		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
+	}
+
+	got := make([]string, 0, len(patterns))
+	for i, p := range patterns {
+		m, ok := p.(map[string]any)
+		if !ok {
+			t.Fatalf("patterns[%d] is not a map: %T", i, p)
+		}
+		pred, ok := m["predicate"].(string)
+		if !ok {
+			t.Fatalf("patterns[%d] missing predicate string", i)
+		}
+		got = append(got, pred)
+	}
+
+	wantUsername := `!has(request.headers["x-maas-username"])`
+	wantGroup := `!has(request.headers["x-maas-group"])`
+	if got[0] != wantUsername || got[1] != wantGroup {
+		t.Fatalf("deny-client-identity-headers predicates = %#v, want [%q, %q]", got, wantUsername, wantGroup)
+	}
 }
 
 func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
