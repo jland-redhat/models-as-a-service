@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1710,8 +1711,12 @@ func TestBuildGatewayAuthPolicySpec_InjectsGatewayIdentityHeader(t *testing.T) {
 	if !ok {
 		t.Fatalf("X-MaaS-Gateway-Auth.plain missing: %#v", gatewayAuth)
 	}
-	if got, _ := plain["value"].(string); got != "test-gateway-identity-token" {
-		t.Fatalf("X-MaaS-Gateway-Auth plain value = %q, want test-gateway-identity-token", got)
+	// Authorino requires CEL expression for static secrets (plain.value is corrupted at inject time).
+	if got, _ := plain["expression"].(string); got != strconv.Quote("test-gateway-identity-token") {
+		t.Fatalf("X-MaaS-Gateway-Auth plain expression = %q, want quoted test token", got)
+	}
+	if _, hasValue := plain["value"]; hasValue {
+		t.Fatal("X-MaaS-Gateway-Auth must use plain.expression, not plain.value")
 	}
 }
 

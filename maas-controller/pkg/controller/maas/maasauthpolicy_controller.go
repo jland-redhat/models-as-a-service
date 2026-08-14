@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1154,9 +1155,11 @@ allow {
 		if response, ok := defaultsRules["response"].(map[string]any); ok {
 			if success, ok := response["success"].(map[string]any); ok {
 				if headers, ok := success["headers"].(map[string]any); ok {
+					// Use CEL string expression — Authorino's plain.value injects a
+					// corrupted header body for static secrets on RHCL Authorino.
 					headers["X-MaaS-Gateway-Auth"] = map[string]any{
 						"plain": map[string]any{
-							"value": token,
+							"expression": strconv.Quote(token),
 						},
 						"metrics":  false,
 						"priority": int64(0),
