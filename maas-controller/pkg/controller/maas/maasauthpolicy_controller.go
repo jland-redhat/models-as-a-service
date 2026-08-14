@@ -85,6 +85,10 @@ type MaaSAuthPolicyReconciler struct {
 	// Applies to auth-valid, subscription-valid, and require-group-membership authorization evaluators.
 	AuthzCacheTTL int64
 
+	// GatewayIdentityToken is a shared secret injected as X-MaaS-Gateway-Auth by the gateway
+	// AuthPolicy after successful authentication. maas-api validates this header on protected routes.
+	GatewayIdentityToken string
+
 	// Recorder emits Kubernetes events for conflict detection warnings.
 	Recorder record.EventRecorder
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
@@ -451,6 +455,7 @@ func subscriptionGatewayCacheKeySelector() string {
 	)
 }
 
+//+kubebuilder:rbac:groups="",resources=secrets,verbs=get;create,resourceNames=maas-gateway-identity
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/finalizers,verbs=update
@@ -1145,6 +1150,22 @@ allow {
 		},
 	}
 
+	if token := strings.TrimSpace(r.GatewayIdentityToken); token != "" {
+		if response, ok := defaultsRules["response"].(map[string]any); ok {
+			if success, ok := response["success"].(map[string]any); ok {
+				if headers, ok := success["headers"].(map[string]any); ok {
+					headers["X-MaaS-Gateway-Auth"] = map[string]any{
+						"plain": map[string]any{
+							"value": token,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					}
+				}
+			}
+		}
+	}
+
 	return map[string]any{
 		"targetRef": map[string]any{
 			"group": "gateway.networking.k8s.io",
@@ -1288,6 +1309,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 ) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
+	gatewayToken, err := ensureGatewayIdentityToken(ctx, r.Client, r.InfraNamespace, r.GatewayIdentityToken)
+	if err != nil {
+		return false, fmt.Errorf("failed to ensure gateway identity secret: %w", err)
+	}
+	r.GatewayIdentityToken = gatewayToken
+
 	// Calculate tenantName from tenantID
 	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
 	tenantName := "models-as-a-service"
@@ -1316,7 +1343,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	// the Gateway lookup.
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(gwPolicy.GroupVersionKind())
-	err := r.Get(ctx, client.ObjectKeyFromObject(gwPolicy), existing)
+	err = r.Get(ctx, client.ObjectKeyFromObject(gwPolicy), existing)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return false, fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
 	}

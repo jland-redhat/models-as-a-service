@@ -96,9 +96,11 @@ const (
 	// LabelTenantInstance distinguishes pods when multiple IPP stacks share a gateway namespace.
 	LabelTenantInstance = "maas.opendatahub.io/tenant-instance"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
-	MaaSControllerDeploymentName = "maas-controller"
-	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
-	MaaSDBSecretKey              = "DB_CONNECTION_URL"
+	MaaSControllerDeploymentName  = "maas-controller"
+	MaaSDBSecretName              = "maas-db-config"          //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretKey               = "DB_CONNECTION_URL"       //nolint:gosec // secret key reference, not a credential
+	MaaSGatewayIdentitySecretName = "maas-gateway-identity"   //nolint:gosec // secret name reference, not a credential
+	MaaSGatewayIdentitySecretKey  = "token"
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
