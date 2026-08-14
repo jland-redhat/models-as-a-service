@@ -97,9 +97,9 @@ const (
 	LabelTenantInstance = "maas.opendatahub.io/tenant-instance"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName  = "maas-controller"
-	MaaSDBSecretName              = "maas-db-config"          //nolint:gosec // secret name reference, not a credential
-	MaaSDBSecretKey               = "DB_CONNECTION_URL"       //nolint:gosec // secret key reference, not a credential
-	MaaSGatewayIdentitySecretName = "maas-gateway-identity"   //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretName              = "maas-db-config" //nolint:gosec // secret name reference, not a credential
+	MaaSDBSecretKey               = "DB_CONNECTION_URL"
+	MaaSGatewayIdentitySecretName = "maas-gateway-identity"
 	MaaSGatewayIdentitySecretKey  = "token"
 
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.

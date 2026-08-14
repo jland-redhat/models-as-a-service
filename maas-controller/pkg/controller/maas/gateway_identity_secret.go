@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -28,7 +29,7 @@ const gatewayIdentityTokenBytes = 32
 func ensureGatewayIdentityToken(ctx context.Context, c client.Client, namespace, configuredToken string) (string, error) {
 	namespace = strings.TrimSpace(namespace)
 	if namespace == "" {
-		return "", fmt.Errorf("infrastructure namespace is required to ensure gateway identity secret")
+		return "", errors.New("infrastructure namespace is required to ensure gateway identity secret")
 	}
 
 	secretName := types.NamespacedName{

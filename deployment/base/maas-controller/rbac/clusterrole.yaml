@@ -29,15 +29,6 @@ rules:
   - watch
 - apiGroups:
   - ""
-  resourceNames:
-  - maas-gateway-identity
-  resources:
-  - secrets
-  verbs:
-  - create
-  - get
-- apiGroups:
-  - ""
   resources:
   - events
   verbs:
@@ -53,6 +44,15 @@ rules:
   - list
   - patch
   - watch
+- apiGroups:
+  - ""
+  resourceNames:
+  - maas-gateway-identity
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
 - apiGroups:
   - ""
   resources:
