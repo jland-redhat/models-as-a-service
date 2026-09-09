@@ -86,7 +86,22 @@ def _warm_gateway(api_keys_base_url: str, headers: dict):
         headers=headers,
         json={"name": "e2e-gateway-warmup"},
     )
+    assert r.status_code in (200, 201), (
+        f"Gateway warm-up failed: HTTP {r.status_code} body_bytes={len(r.content)}"
+    )
     log.info("Gateway warm-up completed: HTTP %d", r.status_code)
+
+
+def _bulk_revoke(api_keys_base_url: str, headers: dict, payload: dict):
+    """POST /bulk-revoke with gateway auth propagation retries."""
+    return _request_with_gateway_retry(
+        requests.post,
+        f"{api_keys_base_url}/bulk-revoke",
+        headers=headers,
+        json=payload,
+        timeout=30,
+        verify=TLS_VERIFY,
+    )
 
 
 @pytest.fixture
@@ -275,6 +290,11 @@ class TestAPIKeyAuthorization:
 class TestAPIKeyBulkOperations:
     """Tests for bulk operations like bulk-revoke."""
 
+    @pytest.fixture(autouse=True)
+    def _ensure_gateway_auth_enforced(self):
+        """Re-sync gateway AuthPolicy before each bulk-revoke test."""
+        _wait_for_gateway_auth_enforced()
+
     def test_bulk_revoke_own_keys(self, api_keys_base_url: str, headers: dict):
         """Test 8: Bulk revoke - user can bulk revoke their own keys."""
         # Create multiple keys
@@ -290,13 +310,7 @@ class TestAPIKeyBulkOperations:
         assert username
 
         # Bulk revoke all keys for this user
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={"username": username},
-            timeout=30,
-            verify=TLS_VERIFY
-        )
+        r_bulk = _bulk_revoke(api_keys_base_url, headers, {"username": username})
         assert r_bulk.status_code == 200
         data = r_bulk.json()
         assert data.get("revokedCount") >= 3, f"Expected at least 3 revoked, got {data.get('revokedCount')}"
@@ -311,13 +325,7 @@ class TestAPIKeyBulkOperations:
     def test_bulk_revoke_other_user_forbidden(self, api_keys_base_url: str, headers: dict):
         """Test 9: Bulk revoke - non-admin cannot bulk revoke other user's keys."""
         # Try to bulk revoke another user's keys (should fail with 403)
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={"username": "someotheruser"},
-            timeout=30,
-            verify=TLS_VERIFY
-        )
+        r_bulk = _bulk_revoke(api_keys_base_url, headers, {"username": "someotheruser"})
         assert r_bulk.status_code == 403, f"Expected 403, got {r_bulk.status_code}: {r_bulk.text}"
         print("[bulk-revoke] Non-admin correctly got 403 when trying to bulk revoke other user's keys")
 
@@ -337,13 +345,7 @@ class TestAPIKeyBulkOperations:
         assert username
 
         # Admin bulk revokes user's keys
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=admin_headers,
-            json={"username": username},
-            timeout=30,
-            verify=TLS_VERIFY
-        )
+        r_bulk = _bulk_revoke(api_keys_base_url, admin_headers, {"username": username})
         assert r_bulk.status_code == 200
         data = r_bulk.json()
         assert data.get("revokedCount") >= 1
@@ -378,12 +380,7 @@ class TestAPIKeyBulkOperations:
                 assert r.status_code in (200, 201), f"Failed to create key: {r.text}"
                 key_ids.append(r.json()["id"])
 
-            r_bulk = requests.post(
-                f"{api_keys_base_url}/bulk-revoke",
-                headers=admin_headers,
-                json={"subscription": sub_name},
-                timeout=30, verify=TLS_VERIFY,
-            )
+            r_bulk = _bulk_revoke(api_keys_base_url, admin_headers, {"subscription": sub_name})
             assert r_bulk.status_code == 200
             data = r_bulk.json()
             assert data["revokedCount"] == 3, (
@@ -406,13 +403,7 @@ class TestAPIKeyBulkOperations:
 
     def test_bulk_revoke_by_subscription_forbidden_for_non_admin(self, api_keys_base_url: str, headers: dict):
         """Non-admin cannot bulk revoke by subscription (requires admin)."""
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={"subscription": SIMULATOR_SUBSCRIPTION},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
+        r_bulk = _bulk_revoke(api_keys_base_url, headers, {"subscription": SIMULATOR_SUBSCRIPTION})
         assert r_bulk.status_code == 403, (
             f"Expected 403 for non-admin subscription revoke, got {r_bulk.status_code}: {r_bulk.text}"
         )
@@ -434,13 +425,7 @@ class TestAPIKeyBulkOperations:
         username = r_get.json().get("username") or r_get.json().get("owner")
         assert username
 
-        r_dry = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={"username": username, "dryRun": True},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
+        r_dry = _bulk_revoke(api_keys_base_url, headers, {"username": username, "dryRun": True})
         assert r_dry.status_code == 200
         data = r_dry.json()
         assert data.get("dryRun") is True, "Response should indicate dry-run"
@@ -487,11 +472,10 @@ class TestAPIKeyBulkOperations:
                 assert r.status_code in (200, 201)
                 key_ids.append(r.json()["id"])
 
-            r_dry = requests.post(
-                f"{api_keys_base_url}/bulk-revoke",
-                headers=admin_headers,
-                json={"subscription": sub_name, "dryRun": True},
-                timeout=30, verify=TLS_VERIFY,
+            r_dry = _bulk_revoke(
+                api_keys_base_url,
+                admin_headers,
+                {"subscription": sub_name, "dryRun": True},
             )
             assert r_dry.status_code == 200
             data = r_dry.json()
@@ -564,11 +548,10 @@ class TestAPIKeyBulkOperations:
             username = r_get.json().get("username") or r_get.json().get("owner")
             assert username
 
-            r_bulk = requests.post(
-                f"{api_keys_base_url}/bulk-revoke",
-                headers=admin_headers,
-                json={"username": username, "subscription": sub_name},
-                timeout=30, verify=TLS_VERIFY,
+            r_bulk = _bulk_revoke(
+                api_keys_base_url,
+                admin_headers,
+                {"username": username, "subscription": sub_name},
             )
             assert r_bulk.status_code == 200
             data = r_bulk.json()
@@ -594,13 +577,7 @@ class TestAPIKeyBulkOperations:
 
     def test_bulk_revoke_missing_scope_returns_400(self, api_keys_base_url: str, headers: dict):
         """Bulk revoke with empty body returns 400."""
-        r_bulk = requests.post(
-            f"{api_keys_base_url}/bulk-revoke",
-            headers=headers,
-            json={},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
+        r_bulk = _bulk_revoke(api_keys_base_url, headers, {})
         assert r_bulk.status_code == 400, (
             f"Expected 400 for empty scope, got {r_bulk.status_code}: {r_bulk.text}"
         )
