@@ -1059,7 +1059,9 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
         err_msg += f", last status: {last.status_code}"
         body_preview = (last.text or "").strip()[:200]
         if body_preview:
-            err_msg += f", last body: {body_preview}"
+            from multitenancy_helpers import redact_sensitive
+
+            err_msg += f", last body: {redact_sensitive(body_preview, max_length=200)}"
     if last_err is not None:
         err_msg += f", last error: {last_err}"
     if last is None and last_err is None:

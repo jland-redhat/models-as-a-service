@@ -372,12 +372,24 @@ class TestPerTenantIPPRouting:
         tenant_logs = deployment_log_snapshot(
             tenant_names["processing_deployment"], since="1m"
         )
-        # praxis-extproc does not log per-request activity at INFO; hybrid BBR HTTP 200
-        # is the routing signal when the default dataplane is praxis.
+        # praxis-extproc does not log per-request activity at INFO. Prove the default
+        # dataplane processed the request by rejecting an unresolvable body model
+        # (path-based auth alone would still return 200).
         if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
+            wrong_body = _post_hybrid_chat(
+                _gateway_url(),
+                MODEL_PATH,
+                api_key,
+                model_name="nonexistent-ipp-route-model",
+            )
+            assert wrong_body.status_code != 200, (
+                "Expected default praxis IPP to reject unresolvable body model; "
+                f"got {wrong_body.status_code}. Request may have bypassed the processor."
+            )
             log.info(
-                "Default dataplane uses praxis-extproc (no per-request log markers); "
-                "routing verified via HTTP 200"
+                "Default dataplane uses praxis-extproc; routing verified via body-model "
+                "rejection (HTTP %d)",
+                wrong_body.status_code,
             )
         else:
             assert ipp_logs_show_recent_activity(default_logs), (

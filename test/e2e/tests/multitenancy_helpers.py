@@ -1164,7 +1164,7 @@ def deployment_log_snapshot(
 ) -> str:
     for args in (
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
-        ["logs", f"deployment/{deployment_name}", "-n", namespace, "--tail=300"],
+        ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}", "--tail=300"],
     ):
         result = _oc_run(args, timeout=120)
         if result.returncode == 0 and (result.stdout or "").strip():
@@ -1217,7 +1217,7 @@ def ipp_logs_show_recent_activity(log_text: str) -> bool:
 
     praxis-extproc (Rust) does not emit per-request lines at default log levels;
     :9090/metrics was also empty/unhelpful in e2e probes. Tests that opt the
-    default tenant into praxis skip this check and rely on HTTP 200 instead.
+    default tenant into praxis skip this check and use body-model rejection.
     """
     markers = ("x-request-id", "handlers/server.go", "processing request headers")
     return any(marker in log_text for marker in markers)
