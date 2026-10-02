@@ -488,6 +488,131 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	assert.Equal(t, int64(2), payloadReplicasVal)
 }
 
+// TestPostRender_ProcessingAndPreProcessingCustomization verifies that distinct
+// payloadProcessing and payloadPreProcessing specs both resolve and apply without
+// cross-contaminating replica counts, resources, or HPA targets.
+func TestPostRender_ProcessingAndPreProcessingCustomization(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
+
+	ppReplicas := int32(3)
+	ppMaxReplicas := int32(12)
+	ppCPU := int32(55)
+	preReplicas := int32(2)
+	preMaxReplicas := int32(8)
+	preCPU := int32(65)
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+				Replicas: &ppReplicas,
+				Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+					MaxReplicas:          &ppMaxReplicas,
+					TargetCPUUtilization: &ppCPU,
+				},
+				Resources: &maasv1alpha1.TenantResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("300m"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("2Gi"),
+					},
+				},
+			},
+			PayloadPreProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+				Replicas: &preReplicas,
+				Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+					MaxReplicas:          &preMaxReplicas,
+					TargetCPUUtilization: &preCPU,
+				},
+				Resources: &maasv1alpha1.TenantResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("150m"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					},
+				},
+			},
+		},
+	}
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "gateway-ns",
+		Name:      "custom-gateway",
+	}}
+	params, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	require.Empty(t, params.Warnings)
+
+	// Distinct resolved params for each workload.
+	require.NotNil(t, params.PayloadProcessingReplicas)
+	assert.Equal(t, int32(3), *params.PayloadProcessingReplicas)
+	assert.True(t, params.PayloadProcessingAutoscaling)
+	assert.Equal(t, int32(12), params.PayloadProcessingMaxReplicas)
+	assert.Equal(t, int32(55), params.PayloadProcessingTargetCPU)
+	require.NotNil(t, params.PayloadProcessingResources)
+	assert.Equal(t, resource.MustParse("300m"), params.PayloadProcessingResources.Requests[corev1.ResourceCPU])
+
+	require.NotNil(t, params.PayloadPreProcessingReplicas)
+	assert.Equal(t, int32(2), *params.PayloadPreProcessingReplicas)
+	assert.True(t, params.PayloadPreProcessingAutoscaling)
+	assert.Equal(t, int32(8), params.PayloadPreProcessingMaxReplicas)
+	assert.Equal(t, int32(65), params.PayloadPreProcessingTargetCPU)
+	require.NotNil(t, params.PayloadPreProcessingResources)
+	assert.Equal(t, resource.MustParse("150m"), params.PayloadPreProcessingResources.Requests[corev1.ResourceCPU])
+
+	rendered := renderOverlayResources(t, "tenant-ns")
+	resources, err := PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
+	require.NoError(t, err)
+
+	// Replicas are owned by HPA when autoscaling is enabled.
+	ppDep := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
+	_, found, err := unstructured.NestedInt64(ppDep.Object, "spec", "replicas")
+	require.NoError(t, err)
+	assert.False(t, found, "payload-processing replicas should be HPA-owned")
+	ppRequests, ppLimits := requireContainerResources(t, ppDep)
+	assert.Equal(t, "300m", ppRequests["cpu"])
+	assert.Equal(t, "512Mi", ppRequests["memory"])
+	assert.Equal(t, "1", ppLimits["cpu"])
+	assert.Equal(t, "2Gi", ppLimits["memory"])
+
+	preDep := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
+	_, found, err = unstructured.NestedInt64(preDep.Object, "spec", "replicas")
+	require.NoError(t, err)
+	assert.False(t, found, "payload-pre-processing replicas should be HPA-owned")
+	preRequests, preLimits := requireContainerResources(t, preDep)
+	assert.Equal(t, "150m", preRequests["cpu"])
+	assert.Equal(t, "256Mi", preRequests["memory"])
+	assert.Equal(t, "500m", preLimits["cpu"])
+	assert.Equal(t, "1Gi", preLimits["memory"])
+
+	ppHPA := requireResource(t, resources, GVKHPA, PayloadProcessingHPAName(""))
+	ppTarget, _, _ := unstructured.NestedString(ppHPA.Object, "spec", "scaleTargetRef", "name")
+	assert.Equal(t, PayloadProcessingName, ppTarget)
+	ppMin, _, _ := unstructured.NestedInt64(ppHPA.Object, "spec", "minReplicas")
+	ppMax, _, _ := unstructured.NestedInt64(ppHPA.Object, "spec", "maxReplicas")
+	assert.Equal(t, int64(3), ppMin)
+	assert.Equal(t, int64(12), ppMax)
+
+	preHPA := requireResource(t, resources, GVKHPA, PayloadPreProcessingHPAName(""))
+	preTarget, _, _ := unstructured.NestedString(preHPA.Object, "spec", "scaleTargetRef", "name")
+	assert.Equal(t, PayloadPreProcessingName, preTarget)
+	preMin, _, _ := unstructured.NestedInt64(preHPA.Object, "spec", "minReplicas")
+	preMax, _, _ := unstructured.NestedInt64(preHPA.Object, "spec", "maxReplicas")
+	assert.Equal(t, int64(2), preMin)
+	assert.Equal(t, int64(8), preMax)
+}
+
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	resources := renderOverlayResources(t, "ai-tenant-redteam")
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
