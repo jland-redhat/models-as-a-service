@@ -62,6 +62,10 @@ type MaasTenantConfigSpec struct {
 	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
 	// +kubebuilder:validation:Optional
 	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
+
+	// PayloadPreProcessing defines scaling configuration for payload-pre-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadPreProcessing *TenantPayloadProcessingConfig `json:"payloadPreProcessing,omitempty"`
 }
 
 // MaasTenantConfigStatus defines the observed state of MaasTenantConfig.

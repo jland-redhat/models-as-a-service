@@ -32,6 +32,12 @@ const (
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
+	// AnnotationPayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count for a tenant.
+	// When autoscaling is enabled via spec.payloadPreProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadPreProcessing.replicas on MaasTenantConfig/Tenant.
+	AnnotationPayloadPreProcessingReplicas = "maas.opendatahub.io/payload-pre-processing-replicas"
+
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
@@ -232,6 +238,10 @@ func PayloadProcessingNetworkPolicyName(tenantID string) string {
 
 func PayloadProcessingHPAName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func PayloadPreProcessingHPAName(tenantID string) string {
+	return resourceNameForTenant(PayloadPreProcessingName, tenantID)
 }
 
 func MaaSAPIServingCertName(tenantID string) string {
