@@ -1,6 +1,7 @@
 package tenantreconcile
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -550,7 +552,7 @@ func TestPostRender_ProcessingAndPreProcessingCustomization(t *testing.T) {
 		Namespace: "gateway-ns",
 		Name:      "custom-gateway",
 	}}
-	params, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+	params, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "https://kubernetes.default.svc", logr.Discard())
 	require.NoError(t, err)
 	require.Empty(t, params.Warnings)
 
@@ -1084,7 +1086,7 @@ func TestBuildPlatformParams_PayloadPreProcessingSpec(t *testing.T) {
 		tenant.SetNamespace("models-as-a-service")
 		tenant.SetName("default-tenant")
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		require.NoError(t, err)
 		assert.False(t, got.PayloadPreProcessingAutoscaling)
 		assert.Equal(t, int32(10), got.PayloadPreProcessingMaxReplicas)
@@ -1112,7 +1114,7 @@ func TestBuildPlatformParams_PayloadPreProcessingSpec(t *testing.T) {
 		tenant.SetNamespace("models-as-a-service")
 		tenant.SetName("default-tenant")
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		require.NoError(t, err)
 		assert.False(t, got.PayloadPreProcessingAutoscaling)
 		require.NotNil(t, got.PayloadPreProcessingReplicas)
@@ -1148,7 +1150,7 @@ func TestBuildPlatformParams_PayloadPreProcessingSpec(t *testing.T) {
 		tenant.SetNamespace("models-as-a-service")
 		tenant.SetName("default-tenant")
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		require.NoError(t, err)
 		assert.True(t, got.PayloadPreProcessingAutoscaling)
 		require.NotNil(t, got.PayloadPreProcessingReplicas)
@@ -1175,7 +1177,7 @@ func TestBuildPlatformParams_PayloadPreProcessingSpec(t *testing.T) {
 			AnnotationPayloadPreProcessingReplicas: "2",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		require.NoError(t, err)
 		require.NotNil(t, got.PayloadPreProcessingReplicas)
 		assert.Equal(t, int32(4), *got.PayloadPreProcessingReplicas)
