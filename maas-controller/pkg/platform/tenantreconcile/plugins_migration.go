@@ -58,26 +58,26 @@ type ippPluginRef struct {
 }
 
 type ippProfilePlugins struct {
-	Request  []ippPluginRef `json:"request" yaml:"request"`
+	Request  []ippPluginRef `json:"request"  yaml:"request"`
 	Response []ippPluginRef `json:"response" yaml:"response"`
 }
 
 type ippProfile struct {
-	Name    string            `json:"name" yaml:"name"`
+	Name    string            `json:"name"    yaml:"name"`
 	Plugins ippProfilePlugins `json:"plugins" yaml:"plugins"`
 }
 
 type ippPlugin struct {
-	Type       string         `json:"type" yaml:"type"`
-	Name       string         `json:"name,omitempty" yaml:"name,omitempty"`
+	Type       string         `json:"type"                 yaml:"type"`
+	Name       string         `json:"name,omitempty"       yaml:"name,omitempty"`
 	Parameters map[string]any `json:"parameters,omitempty" yaml:"parameters,omitempty"`
 }
 
 type ippProcessorConfig struct {
-	APIVersion string      `json:"apiVersion" yaml:"apiVersion"`
-	Kind       string      `json:"kind" yaml:"kind"`
-	Plugins    []ippPlugin `json:"plugins" yaml:"plugins"`
-	Profiles   []ippProfile `json:"profiles" yaml:"profiles"`
+	APIVersion string       `json:"apiVersion" yaml:"apiVersion"`
+	Kind       string       `json:"kind"       yaml:"kind"`
+	Plugins    []ippPlugin  `json:"plugins"    yaml:"plugins"`
+	Profiles   []ippProfile `json:"profiles"   yaml:"profiles"`
 }
 
 // evaluatePluginsConfigMapMigration inspects the live plugins ConfigMap and

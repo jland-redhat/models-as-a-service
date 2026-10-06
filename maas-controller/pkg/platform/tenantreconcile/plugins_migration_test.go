@@ -127,9 +127,7 @@ func TestMatchKnownGoodIPPPluginsConfigMap(t *testing.T) {
 
 	t.Run("custom plugin blocks", func(t *testing.T) {
 		t.Parallel()
-		custom := defaultProcessingYAML + "\n# trailing comment ignored by parser\n"
-		// Inject an extra plugin by rewriting the plugins list.
-		custom = `apiVersion: llm-d.ai/v1alpha1
+		custom := `apiVersion: llm-d.ai/v1alpha1
 kind: PayloadProcessorConfig
 plugins:
 - type: maas-headers-guard
