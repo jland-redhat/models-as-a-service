@@ -188,12 +188,14 @@ After creating the database Secret and Gateways, create or update your DataScien
     | Field | What to set |
     | ----- | ----------- |
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
+    | `spec.apiKeys.deletionRetentionDays` | Retention in **days** for lifecycle-invalidated API keys before physical deletion. Defaults to 90 and must be at least 1. |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
     | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
     | `spec.telemetry.logs.captureUser` | Include `user_id` on usage logs (default `false`; privacy-sensitive). Independent of `metrics.captureUser`. |
+    | `spec.telemetry.logs.captureOrganization` | Include `organization_id` on usage logs (default `true`). Independent of `metrics.captureOrganization`. |
 
     Example (patch common values):
 
@@ -206,6 +208,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     spec:
       apiKeys:
         maxExpirationDays: 90
+        deletionRetentionDays: 90
       telemetry:
         enabled: true
         metrics:
@@ -213,6 +216,7 @@ After creating the database Secret and Gateways, create or update your DataScien
           captureGroup: false
         logs:
           captureUser: false
+          captureOrganization: true
     ```
 
     ```bash
@@ -369,7 +373,7 @@ Delete the `AITenant` resource to start tenant cleanup:
 kubectl delete aitenant team-red -n ai-tenants
 ```
 
-Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
+Deletion invalidates all API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. Lifecycle-invalidated keys are soft-deleted for the configured retention period before physical deletion. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
 
 ## Operand NetworkPolicies
 

@@ -150,6 +150,18 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		}
 	}
 
+	captureOrganization := true
+	if tenant.Spec.Telemetry != nil &&
+		tenant.Spec.Telemetry.Logs != nil &&
+		tenant.Spec.Telemetry.Logs.CaptureOrganization != nil {
+		captureOrganization = *tenant.Spec.Telemetry.Logs.CaptureOrganization
+	}
+	if captureOrganization {
+		if err := tenantreconcile.PatchUsageLogsOrganizationID(ef); err != nil {
+			return false, fmt.Errorf("patch organization_id into EnvoyFilter: %w", err)
+		}
+	}
+
 	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
@@ -169,7 +181,7 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
 
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
 			return false, nil

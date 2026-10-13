@@ -52,3 +52,13 @@ kubectl annotate maastenantconfig default-tenant -n <tenant-namespace> \
 Known-good ConfigMaps do **not** need the force annotation. Applying force on a
 customized ConfigMap replaces it with the Praxis plugins schema; re-apply any
 still-needed customizations in the Praxis ConfigMap shape afterward.
+## Legacy metrics usage dashboard is opt-in
+
+`Config.spec.usageMetricsDashboard` defaults to `false`. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (`dashboard-3-maas-usage-admin`). To keep it:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"usageMetricsDashboard":true}}'
+```
+
+Prefer the logs-based usage dashboards gated by `usageLogging`. See [Setup](../observability/setup.md).

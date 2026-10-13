@@ -146,6 +146,13 @@ type TenantLogsConfig struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	CaptureUser *bool `json:"captureUser,omitempty"`
+
+	// CaptureOrganization includes the subscription organization ID as
+	// organization_id on usage logs. Defaults to true. Independent of
+	// metrics.captureOrganization.
+	// +kubebuilder:default=true
+	// +kubebuilder:validation:Optional
+	CaptureOrganization *bool `json:"captureOrganization,omitempty"`
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.
@@ -153,6 +160,13 @@ type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	MaxExpirationDays *int32 `json:"maxExpirationDays,omitempty"`
+
+	// DeletionRetentionDays controls how long lifecycle-invalidated API keys
+	// remain soft-deleted before physical deletion. The default is 90 days.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=106751
+	DeletionRetentionDays *int32 `json:"deletionRetentionDays,omitempty"`
 }
 
 // TenantMaasAPIConfig defines scaling and resource configuration for maas-api pods.
@@ -267,5 +281,5 @@ type TenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Tenant{}, &TenantList{})
+	register(&Tenant{}, &TenantList{})
 }
