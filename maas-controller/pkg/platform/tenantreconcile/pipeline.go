@@ -208,8 +208,14 @@ func reconcilePayloadProcessingSwitch(
 	if params.SkipIPP {
 		switch payloadProcessingStatus(tenant) {
 		case PayloadProcessingStatusCleanupComplete:
-			if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
-				return payloadProcessingSwitchOutcome{}, fmt.Errorf("clear payload-processing migration annotation: %w", err)
+			// Steady-state praxis tenants already have cleanup-complete and no
+			// migration annotation. Skip the clear patch unless a sticky
+			// blocked marker remains (self-heal); otherwise every reconcile
+			// would Get+Patch MaasTenantConfig for a no-op.
+			if ann := tenant.GetAnnotations(); ann != nil && ann[AnnotationPayloadProcessingMigration] != "" {
+				if err := setPayloadProcessingMigrationAnnotation(ctx, c, tenant, ""); err != nil {
+					return payloadProcessingSwitchOutcome{}, fmt.Errorf("clear payload-processing migration annotation: %w", err)
+				}
 			}
 		case "":
 			gate, gateErr := evaluatePluginsConfigMapMigration(ctx, c, *params, tenant)
