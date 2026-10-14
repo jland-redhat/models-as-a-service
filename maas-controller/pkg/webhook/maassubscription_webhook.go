@@ -69,10 +69,18 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maa
 // Namespace cannot be changed on update (Kubernetes enforces this).
 // Rejects removal of a stamped rate-limit identity annotation so TRLP
 // matching cannot silently flip short→legacy and reset in-window quotas.
+// Also rejects changes to a previously set organization.id association.
 func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
 	if err := validateRateLimitIdentityAnnotationSticky(oldObj, newObj); err != nil {
 		return nil, err
 	}
+
+	oldOrganizationID := oldObj.Spec.OrganizationID()
+	newOrganizationID := newObj.Spec.OrganizationID()
+	if oldOrganizationID != "" && oldOrganizationID != newOrganizationID {
+		return nil, errors.New("organization.id is immutable")
+	}
+
 	return nil, nil
 }
 
