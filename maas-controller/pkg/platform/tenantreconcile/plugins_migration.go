@@ -169,6 +169,9 @@ func isPraxisPluginsConfigMap(cm *corev1.ConfigMap) bool {
 		// would delete customized IPP data without the force annotation.
 		return false
 	}
+	// Permissive on purpose: ai-gateway-controller owns the Praxis ConfigMap
+	// shape and may write pre-extproc.yaml / extproc.yaml independently. Any
+	// Praxis key with no IPP keys means migration already happened.
 	_, hasPre := cm.Data[praxisPreExtProcConfigKey]
 	_, hasExt := cm.Data[praxisExtProcConfigKey]
 	return hasPre || hasExt
@@ -280,6 +283,9 @@ func matchIPPProcessingDefault(cfg ippProcessorConfig) (baseline string, ok bool
 	}
 }
 
+// matchPluginDefs compares plugin definitions in order. IPP chains are
+// order-sensitive (processing order), so a reordered-but-equal set is treated
+// as non-standard and blocks automatic migration.
 func matchPluginDefs(got, want []ippPlugin) bool {
 	if len(got) != len(want) {
 		return false
@@ -313,7 +319,42 @@ func normalizeParams(in map[string]any) map[string]any {
 	if len(in) == 0 {
 		return nil
 	}
-	return in
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = normalizeParamValue(v)
+	}
+	return out
+}
+
+// normalizeParamValue coerces YAML/JSON number types so Go int literals in
+// baselines compare equal to float64 values produced by yaml.Unmarshal.
+func normalizeParamValue(v any) any {
+	switch n := v.(type) {
+	case int:
+		return float64(n)
+	case int32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case uint:
+		return float64(n)
+	case uint32:
+		return float64(n)
+	case uint64:
+		return float64(n)
+	case float32:
+		return float64(n)
+	case []any:
+		out := make([]any, len(n))
+		for i := range n {
+			out[i] = normalizeParamValue(n[i])
+		}
+		return out
+	case map[string]any:
+		return normalizeParams(n)
+	default:
+		return v
+	}
 }
 
 func matchDefaultProfile(profiles []ippProfile, wantRequest, wantResponse []string) bool {

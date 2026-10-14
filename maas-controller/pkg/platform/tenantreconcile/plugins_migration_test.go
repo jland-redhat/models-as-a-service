@@ -181,6 +181,59 @@ profiles:
 		assert.False(t, ok)
 		assert.Contains(t, detail, "parse yaml")
 	})
+
+	t.Run("empty yaml values block", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			ippPreProcessingConfigKey: "",
+			ippProcessingConfigKey:    "",
+		}}
+		_, ok, detail := matchKnownGoodIPPPluginsConfigMap(cm)
+		assert.False(t, ok)
+		// Empty YAML unmarshals to a zero-value config (nil plugins/profiles),
+		// which fails the product-default match rather than panicking.
+		assert.Contains(t, detail, "pre-processing plugins/profiles")
+	})
+
+	t.Run("reordered plugins block", func(t *testing.T) {
+		t.Parallel()
+		// Same plugin set as the product default, but request chain order differs.
+		reordered := `apiVersion: llm-d.ai/v1alpha1
+kind: PayloadProcessorConfig
+plugins:
+- type: maas-headers-guard
+  name: maas-headers-guard
+- type: stream-usage-enforcer
+- type: model-provider-resolver
+- type: api-translation
+- type: apikey-injection
+profiles:
+- name: default
+  plugins:
+    request:
+    - pluginRef: stream-usage-enforcer
+    - pluginRef: maas-headers-guard
+    - pluginRef: model-provider-resolver
+    - pluginRef: api-translation
+    - pluginRef: apikey-injection
+    response: []
+`
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey:    reordered,
+		}}
+		_, ok, detail := matchKnownGoodIPPPluginsConfigMap(cm)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "processing plugins/profiles")
+	})
+}
+
+func TestNormalizeParamsNumericEquivalence(t *testing.T) {
+	t.Parallel()
+	// YAML unmarshaling typically yields float64 for numbers; baselines may use int.
+	got := normalizeParams(map[string]any{"timeoutMs": float64(30), "nested": map[string]any{"retries": float64(3)}})
+	want := normalizeParams(map[string]any{"timeoutMs": 30, "nested": map[string]any{"retries": 3}})
+	assert.Equal(t, want, got)
 }
 
 func TestIsPraxisPluginsConfigMap(t *testing.T) {
@@ -191,6 +244,14 @@ func TestIsPraxisPluginsConfigMap(t *testing.T) {
 		cm := &corev1.ConfigMap{Data: map[string]string{
 			praxisPreExtProcConfigKey: "server: {}",
 			praxisExtProcConfigKey:    "server: {}",
+		}}
+		assert.True(t, isPraxisPluginsConfigMap(cm))
+	})
+
+	t.Run("partial praxis key is already praxis", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			praxisExtProcConfigKey: "server: {}",
 		}}
 		assert.True(t, isPraxisPluginsConfigMap(cm))
 	})
