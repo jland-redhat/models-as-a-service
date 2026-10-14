@@ -310,7 +310,7 @@ profiles:
 		Source:     "aitenant",
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
 		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, pluginsCM,
 	).Build()
 
@@ -332,6 +332,8 @@ profiles:
 	require.NotNil(t, result)
 	assert.True(t, result.DeploymentPending)
 	assert.Contains(t, result.Detail, AnnotationForcePayloadProcessingMigration)
+	require.NotEmpty(t, result.Warnings)
+	assert.Contains(t, result.Warnings[0], AnnotationForcePayloadProcessingMigration)
 
 	// IPP Deployment must remain until force annotation is applied.
 	dep := &unstructured.Unstructured{}
@@ -340,6 +342,13 @@ profiles:
 		Namespace: gwNS,
 		Name:      PayloadProcessingDeploymentName(tenantName),
 	}, dep))
+
+	// Non-IPP apply still runs while migration is blocked (maas-api stays ready).
+	apiDep := &appsv1.Deployment{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{
+		Namespace: appNs,
+		Name:      MaaSAPIDeploymentName(tenantName),
+	}, apiDep))
 
 	gotTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{

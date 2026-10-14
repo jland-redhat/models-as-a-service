@@ -169,6 +169,42 @@ profiles:
 		assert.False(t, ok)
 		assert.Contains(t, detail, "unexpected data keys")
 	})
+
+	t.Run("unknown yaml field blocks", func(t *testing.T) {
+		t.Parallel()
+		withUnknown := defaultProcessingYAML + "postProcessing:\n  enabled: true\n"
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey:    withUnknown,
+		}}
+		_, ok, detail := matchKnownGoodIPPPluginsConfigMap(cm)
+		assert.False(t, ok)
+		assert.Contains(t, detail, "parse yaml")
+	})
+}
+
+func TestIsPraxisPluginsConfigMap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("praxis keys only", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			praxisPreExtProcConfigKey: "server: {}",
+			praxisExtProcConfigKey:    "server: {}",
+		}}
+		assert.True(t, isPraxisPluginsConfigMap(cm))
+	})
+
+	t.Run("mixed ipp and praxis keys rejected", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{Data: map[string]string{
+			praxisPreExtProcConfigKey: "server: {}",
+			praxisExtProcConfigKey:    "server: {}",
+			ippPreProcessingConfigKey: defaultPreProcessingYAML,
+			ippProcessingConfigKey:    defaultProcessingYAML,
+		}}
+		assert.False(t, isPraxisPluginsConfigMap(cm))
+	})
 }
 
 func TestEvaluatePluginsConfigMapMigration(t *testing.T) {
@@ -303,5 +339,29 @@ profiles:
 		require.NoError(t, err)
 		assert.Equal(t, pluginsMigrationAllow, got.Decision)
 		assert.Equal(t, "praxis", got.Baseline)
+	})
+
+	t.Run("mixed ipp and praxis keys block", func(t *testing.T) {
+		t.Parallel()
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      PayloadProcessingPluginsConfigMapName,
+				Namespace: "openshift-ingress",
+			},
+			Data: map[string]string{
+				praxisPreExtProcConfigKey: "server: {}",
+				praxisExtProcConfigKey:    "server: {}",
+				ippPreProcessingConfigKey: defaultPreProcessingYAML,
+				ippProcessingConfigKey:    defaultProcessingYAML,
+			},
+		}
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cm).Build()
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "rhoai"},
+		}
+		got, err := evaluatePluginsConfigMapMigration(context.Background(), cl, params, tenant)
+		require.NoError(t, err)
+		assert.Equal(t, pluginsMigrationBlock, got.Decision)
+		assert.Contains(t, got.Reason, "non-standard")
 	})
 }

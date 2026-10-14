@@ -42,9 +42,12 @@ While blocked:
 - Annotation `maas.opendatahub.io/payload-processing-migration=blocked` is set
 - Legacy IPP resources remain until an operator acknowledges the risk
 
-Force migration after reviewing release notes:
+Force migration after reviewing release notes. Back up the current tenant plugins
+ConfigMap from the gateway namespace first — cleanup deletes it and the controller
+does not retain the previous custom data:
 
 ```bash
+kubectl get configmap <tenant-plugins-configmap> -n <gateway-namespace> -o yaml > plugins-backup.yaml
 kubectl annotate maastenantconfig default-tenant -n <tenant-namespace> \
   maas.opendatahub.io/force-payload-processing-migration=true --overwrite
 ```

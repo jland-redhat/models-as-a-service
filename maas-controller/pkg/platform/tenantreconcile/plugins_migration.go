@@ -162,6 +162,13 @@ func isPraxisPluginsConfigMap(cm *corev1.ConfigMap) bool {
 	if cm == nil || cm.Data == nil {
 		return false
 	}
+	_, hasIPPPre := cm.Data[ippPreProcessingConfigKey]
+	_, hasIPPPost := cm.Data[ippProcessingConfigKey]
+	if hasIPPPre || hasIPPPost {
+		// Mixed IPP+Praxis keys must not skip the IPP baseline gate; cleanup
+		// would delete customized IPP data without the force annotation.
+		return false
+	}
 	_, hasPre := cm.Data[praxisPreExtProcConfigKey]
 	_, hasExt := cm.Data[praxisExtProcConfigKey]
 	return hasPre || hasExt
@@ -215,7 +222,7 @@ func unexpectedIPPConfigMapKeys(cm *corev1.ConfigMap) []string {
 
 func parseIPPProcessorConfig(raw string) (ippProcessorConfig, error) {
 	var cfg ippProcessorConfig
-	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+	if err := yaml.UnmarshalStrict([]byte(raw), &cfg); err != nil {
 		return ippProcessorConfig{}, fmt.Errorf("parse yaml: %w", err)
 	}
 	if cfg.Kind != "" && cfg.Kind != "PayloadProcessorConfig" {
