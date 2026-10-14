@@ -139,7 +139,6 @@ metadata:
     - If the same rate set has both generations, the controller emits two limits (`tokens-…` for legacy members, `tokens-…-id` for short-ID members) because one limit can have only one counter expression. That extra limit is the size trade-off for keeping old quotas; see [Upgrade to 3.6](../migration/upgrade-to-3.6.md#trade-off-size-savings-only-accrue-on-new-subscriptions).
     - A group of one gets the single equality without parentheses. Unlimited subscriptions share `tokens-unlimited` with mixed predicates and no counters.
 - AuthPolicy is responsible for resolving subscription selection (via maas-api) and setting the matching identity before TRLP runs; see [Authentication Internals](./authentication-internals.md).
-- AuthPolicy is responsible for resolving subscription selection (via maas-api) and setting that short ID before TRLP runs; see [Authentication Internals](./authentication-internals.md).
 - Exempts `/v1/models` from token consumption limits where configured so discovery still works when quotas are exhausted
 
 Kuadrant copies every limit into every route-match ActionSet of the gateway's wasm config (`kuadrant-{gateway-name}`, an `EnvoyFilter` on Kuadrant 1.5+ or a `WasmPlugin` on 1.4.x), so the number of limits drives that object's size (RHOAIENG-95277). Grouping by rate means a subscription at an existing rate adds one clause to a predicate instead of a whole limit. See [Subscription Cardinality](../advanced-administration/subscription-cardinality.md#gateway-config-size).

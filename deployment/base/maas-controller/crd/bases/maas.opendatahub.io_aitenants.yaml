@@ -40,8 +40,9 @@ spec:
           network-admin-provisioned Gateway reference, the MaaS tenant config object,
           and tenant-admin Roles.
 
-          Praxis tenants (ai-gateway-controller owns payload processing) opt out of
-          maas-controller IPP via metadata.annotations["maas.opendatahub.io/payload-processing-type"]="praxis".
+          Payload processing defaults to praxis (ai-gateway-controller). Opt into
+          maas-controller legacy IPP via MaasTenantConfig annotation
+          maas.opendatahub.io/payload-processing-type=ipp.
 
           The AITenant name is used as a suffix for per-tenant maas-api resources
           (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -135,6 +136,32 @@ spec:
                   AITenant is the source of truth for this derived platform context; the
                   bridge Tenant config object owns MaaS-specific user config only.
                 properties:
+                  accessTokenPurpose:
+                    description: |-
+                      AccessTokenPurpose is the exact value required in AccessTokenPurposeClaim.
+                      It and AccessTokenPurposeClaim must be set together and are required for
+                      delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
+                  accessTokenPurposeClaim:
+                    description: |-
+                      AccessTokenPurposeClaim is the simple token claim name that carries the
+                      access-token purpose, such as token_use. It and AccessTokenPurpose must be
+                      set together and are required for delegated Grid administration.
+                    maxLength: 128
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9_-]+$
+                    type: string
+                  audience:
+                    description: |-
+                      Audience is the exact OIDC audience required in the token `aud` claim.
+                      It must be set for delegated Grid administration.
+                    maxLength: 256
+                    minLength: 1
+                    pattern: ^\S+$
+                    type: string
                   clientId:
                     description: ClientID is the OAuth2 client ID.
                     maxLength: 256
@@ -156,6 +183,10 @@ spec:
                 - clientId
                 - issuerUrl
                 type: object
+                x-kubernetes-validations:
+                - message: accessTokenPurposeClaim and accessTokenPurpose must be
+                    set together
+                  rule: has(self.accessTokenPurposeClaim) == has(self.accessTokenPurpose)
               rbac:
                 description: |-
                   RBAC is retained only for compatibility with existing AITenant manifests.

@@ -32,7 +32,7 @@ Short IDs exist to keep long `namespace/name@modelNs/model` strings out of Kuadr
 
 Further costs while a cluster has both generations:
 
-- **A mixed rate group splits into two TRLP limits** (`tokens-{limit}-per-{window}` for legacy members, `tokens-{limit}-per-{window}-id` for short-ID members). Kuadrant copies every limit into every route-match ActionSet, so mixed generations partially undo rate grouping ([RHOAIENG-95277](https://issues.redhat.com/browse/RHOAIENG-95277)) until the legacy members are gone.
+- **A mixed-rate group splits into two TRLP limits** (`tokens-{limit}-per-{window}` for legacy members, `tokens-{limit}-per-{window}-id` for short-ID members). Kuadrant copies every limit into every route-match ActionSet, so mixed generations partially undo rate grouping (see [Subscription Cardinality](../advanced-administration/subscription-cardinality.md#gateway-config-size)) until the legacy members are gone.
 - There is **no automatic backfill**. To reclaim the size win for an old subscription you must recreate it (or set the annotation to `short`), which **resets that subscription’s in-window quota**.
 - Historical **Prometheus** and **Loki** usage is unaffected either way. Telemetry still labels by subscription name (`auth.identity.selected_subscription` / `X-MaaS-Subscription`).
 
@@ -43,3 +43,14 @@ If the cluster still uses per-subscription TRLP limit names from before rate gro
 - `auth.identity.selected_subscription_key` remains for telemetry and debugging, and is still the rate-limit identity for legacy subscriptions.
 - Rate limiting for **new** subscriptions matches `auth.identity.selected_subscription_id` (see [Authentication Internals](../architecture-internals/authentication-internals.md)).
 - Response header `X-MaaS-Subscription-Rate-Limit-Id` may be injected when select returns `rateLimitId` (new subscriptions only). Gateway AuthPolicy rejects inbound client values for that header; also ensure Praxis / identity-header strip configs treat `x-maas-*` (prefix or explicit list) so it cannot be spoofed upstream.
+
+## Legacy metrics usage dashboard is opt-in
+
+`Config.spec.usageMetricsDashboard` defaults to `false`. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (`dashboard-3-maas-usage-admin`). To keep it:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"usageMetricsDashboard":true}}'
+```
+
+Prefer the logs-based usage dashboards. The operator deploys them with the usage-log resources. See [Setup](../observability/setup.md).

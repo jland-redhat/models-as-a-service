@@ -41,20 +41,33 @@ type Selector struct {
 	modelLister   models.MaaSModelRefLister
 	accessChecker ModelAccessChecker
 	logger        *logger.Logger
+	tenantName    string
+}
+
+// SelectorOption configures a Selector.
+type SelectorOption func(*Selector)
+
+// WithTenantName sets the tenant name returned as the fairness ID of selected subscriptions.
+func WithTenantName(name string) SelectorOption {
+	return func(s *Selector) { s.tenantName = name }
 }
 
 // NewSelector creates a new subscription selector.
 // modelLister is optional; when provided, model refs in list responses are enriched with displayName and description.
-func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister, accessChecker ModelAccessChecker) *Selector {
+func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister, accessChecker ModelAccessChecker, opts ...SelectorOption) *Selector {
 	if log == nil {
 		log = logger.Production()
 	}
-	return &Selector{
+	s := &Selector{
 		lister:        lister,
 		modelLister:   modelLister,
 		accessChecker: accessChecker,
 		logger:        log,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // buildModelIndex builds a lookup map keyed by "namespace/name" from the MaaSModelRef cache.
@@ -116,6 +129,7 @@ type subscription struct {
 	DeletionTimestamp      *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
 	UseShortRateLimitID    bool                   // annotation maas.opendatahub.io/rate-limit-identity=short
+	Objectives             map[string]string      // "namespace/name" of a model -> InferenceObjective name, from status.flowControlStatuses
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
@@ -143,7 +157,7 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		}
 
 		// Exclude subscriptions being deleted
-		if sub.DeletionTimestamp != nil {
+		if subscriptionIsDeleting(&sub) {
 			continue
 		}
 
@@ -209,6 +223,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		for _, sub := range subscriptions {
 			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
 			if qualifiedName == requestedSubscription {
+				if subscriptionIsDeleting(&sub) {
+					continue
+				}
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
@@ -220,7 +237,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				resp := toResponseWithResolvedModel(&sub, requestedModel)
+				resp := s.toResponseWithResolvedModel(&sub, requestedModel)
 				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
 				return resp, nil
 			}
@@ -230,6 +247,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if !strings.Contains(requestedSubscription, "/") {
 			for _, sub := range subscriptions {
 				if sub.Name != requestedSubscription {
+					continue
+				}
+				if subscriptionIsDeleting(&sub) {
 					continue
 				}
 				if !userHasAccess(&sub, username, groups) {
@@ -242,7 +262,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				resp := toResponseWithResolvedModel(&sub, requestedModel)
+				resp := s.toResponseWithResolvedModel(&sub, requestedModel)
 				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
 				return resp, nil
 			}
@@ -255,6 +275,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	// Branch 2: Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			// If model is specified, only include subscriptions that contain that model
 			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
@@ -273,7 +296,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
 			return nil, err
 		}
-		resp := toResponseWithResolvedModel(&accessibleSubs[0], requestedModel)
+		resp := s.toResponseWithResolvedModel(&accessibleSubs[0], requestedModel)
 		resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &accessibleSubs[0], requestedModel)
 		return resp, nil
 	}
@@ -304,6 +327,9 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	var accessible []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			accessible = append(accessible, sub)
 		}
@@ -315,6 +341,10 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	sortSubscriptionsByPriority(accessible)
 	return toResponse(&accessible[0]), nil
+}
+
+func subscriptionIsDeleting(sub *subscription) bool {
+	return sub != nil && sub.DeletionTimestamp != nil
 }
 
 // loadSubscriptions fetches and parses MaaSSubscription resources.
@@ -468,6 +498,8 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 			}
 		}
 
+		parseFlowControlStatuses(status, &sub)
+
 		// Parse status.tokenRateLimitStatuses to extract TRLP health
 		if trlpStatuses, found, _ := unstructured.NestedSlice(status, "tokenRateLimitStatuses"); found {
 			for _, statusRaw := range trlpStatuses {
@@ -510,6 +542,37 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 }
 
 // parseModelRef extracts a ModelRefInfo from an unstructured model ref map.
+// flowControlReasonObjectiveConflict is the MaaSSubscription flow-control reason for an
+// objective name held by an object not managed for the subscription.
+const flowControlReasonObjectiveConflict = "ObjectiveConflict"
+
+// parseFlowControlStatuses reads the objective name of each model from
+// status.flowControlStatuses. Names held by a foreign object are skipped, so its priority
+// is never applied.
+func parseFlowControlStatuses(status map[string]any, sub *subscription) {
+	statuses, found, _ := unstructured.NestedSlice(status, "flowControlStatuses")
+	if !found {
+		return
+	}
+	for _, raw := range statuses {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		namespace, _ := m["namespace"].(string)
+		name, _ := m["name"].(string)
+		objective, _ := m["objectiveName"].(string)
+		reason, _ := m["reason"].(string)
+		if name == "" || objective == "" || reason == flowControlReasonObjectiveConflict {
+			continue
+		}
+		if sub.Objectives == nil {
+			sub.Objectives = make(map[string]string)
+		}
+		sub.Objectives[namespace+"/"+name] = objective
+	}
+}
+
 func parseModelRef(modelMap map[string]any) ModelRefInfo {
 	ref := ModelRefInfo{}
 	if name, ok := modelMap["name"].(string); ok {
@@ -877,12 +940,19 @@ func toResponse(sub *subscription) *SelectResponse {
 }
 
 // toResponseWithResolvedModel converts a subscription and attaches the resolved
-// MaaSModelRef identity (namespace/name) used for TokenRateLimitPolicy matching.
-func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
+// MaaSModelRef identity (namespace/name) used for TokenRateLimitPolicy matching, and the
+// flow-control objective and fairness ID for that model.
+func (s *Selector) toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
 	resp := toResponse(sub)
 	resp.ResolvedModel = resolvedModel
-	if sub != nil && sub.UseShortRateLimitID {
-		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+	resp.FairnessID = s.tenantName
+	if sub != nil {
+		if sub.UseShortRateLimitID {
+			resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+		}
+		if ref := findModelRef(sub, resolvedModel); ref != nil {
+			resp.Objective = sub.Objectives[ref.Namespace+"/"+ref.Name]
+		}
 	}
 	return resp
 }
