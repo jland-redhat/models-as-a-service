@@ -136,6 +136,56 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 	}
 }
 
+func TestValidateRateLimitIdentityAnnotationSticky(t *testing.T) {
+	t.Parallel()
+
+	withAnn := func(v string) *maasv1alpha1.MaaSSubscription {
+		sub := &maasv1alpha1.MaaSSubscription{
+			ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"},
+		}
+		if v != "" {
+			sub.Annotations = map[string]string{annotationRateLimitIdentity: v}
+		}
+		return sub
+	}
+
+	tests := []struct {
+		name    string
+		old     *maasv1alpha1.MaaSSubscription
+		new     *maasv1alpha1.MaaSSubscription
+		wantErr bool
+	}{
+		{name: "unset stays unset", old: withAnn(""), new: withAnn(""), wantErr: false},
+		{name: "controller may stamp short", old: withAnn(""), new: withAnn(rateLimitIdentityShort), wantErr: false},
+		{name: "controller may stamp legacy", old: withAnn(""), new: withAnn(rateLimitIdentityLegacy), wantErr: false},
+		{name: "short stays short", old: withAnn(rateLimitIdentityShort), new: withAnn(rateLimitIdentityShort), wantErr: false},
+		{name: "legacy may opt into short", old: withAnn(rateLimitIdentityLegacy), new: withAnn(rateLimitIdentityShort), wantErr: false},
+		{name: "short may switch to legacy", old: withAnn(rateLimitIdentityShort), new: withAnn(rateLimitIdentityLegacy), wantErr: false},
+		{name: "reject short removal", old: withAnn(rateLimitIdentityShort), new: withAnn(""), wantErr: true},
+		{name: "reject legacy removal", old: withAnn(rateLimitIdentityLegacy), new: withAnn(""), wantErr: true},
+		{
+			name: "reject short removal via nil annotations map",
+			old:  withAnn(rateLimitIdentityShort),
+			new: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"},
+			},
+			wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateRateLimitIdentityAnnotationSticky(tc.old, tc.new)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr && err != nil && !contains(err.Error(), annotationRateLimitIdentity) {
+				t.Fatalf("error = %v, want annotation name in message", err)
+			}
+		})
+	}
+}
+
 func TestMaaSSubscriptionValidator_ValidateDelete(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = maasv1alpha1.AddToScheme(scheme)

@@ -28,8 +28,16 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
+// Rate-limit identity annotation. Keep in sync with
+// maas-controller/pkg/controller/maas.AnnotationRateLimitIdentity.
+const (
+	annotationRateLimitIdentity = "maas.opendatahub.io/rate-limit-identity"
+	rateLimitIdentityShort      = "short"
+	rateLimitIdentityLegacy     = "legacy"
+)
+
 // MaaSSubscriptionValidator validates MaaSSubscription resources.
-// +kubebuilder:webhook:path=/validate-maas-opendatahub-io-v1alpha1-maassubscription,mutating=false,failurePolicy=fail,sideEffects=None,groups=maas.opendatahub.io,resources=maassubscriptions,verbs=create,versions=v1alpha1,name=vmaassubscription.kb.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-maas-opendatahub-io-v1alpha1-maassubscription,mutating=false,failurePolicy=fail,sideEffects=None,groups=maas.opendatahub.io,resources=maassubscriptions,verbs=create;update,versions=v1alpha1,name=vmaassubscription.kb.io,admissionReviewVersions=v1
 
 type MaaSSubscriptionValidator struct {
 	Client    client.Reader
@@ -58,10 +66,39 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maa
 }
 
 // ValidateUpdate validates MaaSSubscription on update.
-// Namespace cannot be changed on update (Kubernetes enforces this), so we don't need to validate.
+// Namespace cannot be changed on update (Kubernetes enforces this).
+// Rejects removal of a stamped rate-limit identity annotation so TRLP
+// matching cannot silently flip short→legacy and reset in-window quotas.
 func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
-	// No validation needed - namespace is immutable
+	if err := validateRateLimitIdentityAnnotationSticky(oldObj, newObj); err != nil {
+		return nil, err
+	}
 	return nil, nil
+}
+
+func rateLimitIdentityAnnotation(sub *maasv1alpha1.MaaSSubscription) string {
+	if sub == nil || sub.Annotations == nil {
+		return ""
+	}
+	return sub.Annotations[annotationRateLimitIdentity]
+}
+
+func validateRateLimitIdentityAnnotationSticky(oldObj, newObj *maasv1alpha1.MaaSSubscription) error {
+	oldVal := rateLimitIdentityAnnotation(oldObj)
+	switch oldVal {
+	case rateLimitIdentityShort, rateLimitIdentityLegacy:
+		// ok
+	default:
+		return nil
+	}
+	newVal := rateLimitIdentityAnnotation(newObj)
+	if newVal == "" {
+		return fmt.Errorf(
+			"annotation %q cannot be removed once set to %q (changing to %q or %q is allowed)",
+			annotationRateLimitIdentity, oldVal, rateLimitIdentityShort, rateLimitIdentityLegacy,
+		)
+	}
+	return nil
 }
 
 // ValidateDelete validates MaaSSubscription on deletion.

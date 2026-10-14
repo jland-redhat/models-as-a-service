@@ -42,6 +42,9 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			want: RateLimitIdentityShort,
 		},
 		{
+			// Also the hazard if a stamped short annotation is removed after
+			// status exists: classification flips to legacy and TRLP keys change.
+			// The validating webhook rejects that removal.
 			name: "surviving CR with phase is legacy",
 			sub: &maasv1alpha1.MaaSSubscription{
 				Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
