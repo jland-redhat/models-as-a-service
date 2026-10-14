@@ -202,7 +202,7 @@ func TestMaaSSubscriptionReconciler_ExistingSubKeepsKeyIdentity(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	for _, name := range []string{"old-sub", "new-sub"} {
 		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
 		if _, err := r.Reconcile(t.Context(), req); err != nil {
