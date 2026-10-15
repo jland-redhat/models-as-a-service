@@ -20,9 +20,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
+
+// rateLimitIdentityEpoch is when this controller process started. Unannotated
+// subscriptions that already had status and were created before this instant
+// are treated as upgrade survivors (legacy). CRs created after process start
+// stay short even if status lands before the sticky annotation is written —
+// otherwise a reconcile race would grandfather brand-new subscriptions onto
+// selected_subscription_key and defeat the short-ID size win.
+var rateLimitIdentityEpoch = time.Now()
 
 // Rate-limit identity annotation. Must stay in sync with
 // maas-api/internal/constant.AnnotationRateLimitIdentity.
@@ -58,8 +67,10 @@ func SubscriptionRateLimitID(modelScopedKey string) string {
 
 // classifiedRateLimitIdentity returns the sticky identity scheme for a
 // subscription. An explicit annotation always wins. Otherwise a CR that
-// already has status (survived an upgrade) stays legacy; a brand-new CR with
-// empty status is short.
+// already had status before this controller process started (upgrade
+// survivor; CreationTimestamp zero in unit tests) stays legacy; a CR created
+// after process start is short even when status is already populated so a
+// stamp-vs-status race cannot flip new subscriptions to legacy.
 func classifiedRateLimitIdentity(sub *maasv1alpha1.MaaSSubscription) string {
 	if sub == nil {
 		return RateLimitIdentityLegacy
@@ -70,7 +81,11 @@ func classifiedRateLimitIdentity(sub *maasv1alpha1.MaaSSubscription) string {
 			return sub.Annotations[AnnotationRateLimitIdentity]
 		}
 	}
-	if sub.Status.Phase != "" || len(sub.Status.Conditions) > 0 {
+	if sub.Status.Phase == "" && len(sub.Status.Conditions) == 0 {
+		return RateLimitIdentityShort
+	}
+	created := sub.CreationTimestamp.Time
+	if sub.CreationTimestamp.IsZero() || created.Before(rateLimitIdentityEpoch) {
 		return RateLimitIdentityLegacy
 	}
 	return RateLimitIdentityShort

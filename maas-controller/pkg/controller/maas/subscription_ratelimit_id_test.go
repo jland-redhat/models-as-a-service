@@ -2,6 +2,7 @@ package maas
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -72,6 +73,29 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			name: "explicit legacy wins on empty status",
 			sub: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{Annotations: legacyAnn},
+			},
+			want: RateLimitIdentityLegacy,
+		},
+		{
+			// Status can land before the sticky annotation on a brand-new CR.
+			// Creation after process start must stay short so TRLP does not
+			// grandfather new subscriptions onto selected_subscription_key.
+			name: "post-start CR with status but no annotation is short",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					CreationTimestamp: metav1.NewTime(rateLimitIdentityEpoch.Add(time.Minute)),
+				},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
+			},
+			want: RateLimitIdentityShort,
+		},
+		{
+			name: "pre-start CR with status but no annotation is legacy",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					CreationTimestamp: metav1.NewTime(rateLimitIdentityEpoch.Add(-time.Hour)),
+				},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
 			},
 			want: RateLimitIdentityLegacy,
 		},
