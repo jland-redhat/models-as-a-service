@@ -466,14 +466,16 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
-	// Add finalizer if not present; stamp sticky rate-limit identity so new
-	// CRs get short IDs and upgraded CRs keep selected_subscription_key.
+	// Stamp sticky rate-limit identity before AddFinalizer so classification
+	// can treat an already-persisted cleanup finalizer as evidence the CR
+	// survived an upgrade (legacy). New CRs get short IDs; upgraded CRs keep
+	// selected_subscription_key.
 	needsUpdate := false
-	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
-		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
+	if stampRateLimitIdentityAnnotation(subscription) {
 		needsUpdate = true
 	}
-	if stampRateLimitIdentityAnnotation(subscription) {
+	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
+		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
 		needsUpdate = true
 	}
 	if needsUpdate {

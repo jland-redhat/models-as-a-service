@@ -99,6 +99,26 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			},
 			want: RateLimitIdentityLegacy,
 		},
+		{
+			name: "persisted cleanup finalizer is legacy even with empty status",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{maasSubscriptionFinalizer},
+				},
+			},
+			want: RateLimitIdentityLegacy,
+		},
+		{
+			name: "finalizer wins over post-start creation timestamp",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					CreationTimestamp: metav1.NewTime(rateLimitIdentityEpoch.Add(time.Minute)),
+					Finalizers:        []string{maasSubscriptionFinalizer},
+				},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
+			},
+			want: RateLimitIdentityLegacy,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

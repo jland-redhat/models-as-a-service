@@ -67,10 +67,13 @@ func SubscriptionRateLimitID(modelScopedKey string) string {
 
 // classifiedRateLimitIdentity returns the sticky identity scheme for a
 // subscription. An explicit annotation always wins. Otherwise a CR that
-// already had status before this controller process started (upgrade
-// survivor; CreationTimestamp zero in unit tests) stays legacy; a CR created
-// after process start is short even when status is already populated so a
-// stamp-vs-status race cannot flip new subscriptions to legacy.
+// already carries the cleanup finalizer (reconciled before this controller
+// version) stays legacy — callers must classify before AddFinalizer mutates
+// the in-memory object. Status without a finalizer falls back to the
+// process-start epoch so a stamp-vs-status race cannot grandfather brand-new
+// CRs onto selected_subscription_key, while upgrade survivors that briefly
+// lack a finalizer still default to legacy when CreationTimestamp is older
+// than this process (or zero in unit tests).
 func classifiedRateLimitIdentity(sub *maasv1alpha1.MaaSSubscription) string {
 	if sub == nil {
 		return RateLimitIdentityLegacy
@@ -79,6 +82,11 @@ func classifiedRateLimitIdentity(sub *maasv1alpha1.MaaSSubscription) string {
 		switch sub.Annotations[AnnotationRateLimitIdentity] {
 		case RateLimitIdentityShort, RateLimitIdentityLegacy:
 			return sub.Annotations[AnnotationRateLimitIdentity]
+		}
+	}
+	for _, f := range sub.Finalizers {
+		if f == maasSubscriptionFinalizer {
+			return RateLimitIdentityLegacy
 		}
 	}
 	if sub.Status.Phase == "" && len(sub.Status.Conditions) == 0 {

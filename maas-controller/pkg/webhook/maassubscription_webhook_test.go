@@ -163,6 +163,9 @@ func TestValidateRateLimitIdentityAnnotationSticky(t *testing.T) {
 		{name: "short may switch to legacy", old: withAnn(rateLimitIdentityShort), new: withAnn(rateLimitIdentityLegacy), wantErr: false},
 		{name: "reject short removal", old: withAnn(rateLimitIdentityShort), new: withAnn(""), wantErr: true},
 		{name: "reject legacy removal", old: withAnn(rateLimitIdentityLegacy), new: withAnn(""), wantErr: true},
+		{name: "reject short to garbage", old: withAnn(rateLimitIdentityShort), new: withAnn("bogus"), wantErr: true},
+		{name: "reject legacy to garbage", old: withAnn(rateLimitIdentityLegacy), new: withAnn("garbage"), wantErr: true},
+		{name: "reject unset to garbage", old: withAnn(""), new: withAnn("nope"), wantErr: true},
 		{
 			name: "reject short removal via nil annotations map",
 			old:  withAnn(rateLimitIdentityShort),
@@ -184,6 +187,26 @@ func TestValidateRateLimitIdentityAnnotationSticky(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateRateLimitIdentityAnnotationValue(t *testing.T) {
+	t.Parallel()
+	assertNil := func(t *testing.T, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	assertErr := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected error")
+		}
+	}
+	assertNil(t, validateRateLimitIdentityAnnotationValue(""))
+	assertNil(t, validateRateLimitIdentityAnnotationValue(rateLimitIdentityShort))
+	assertNil(t, validateRateLimitIdentityAnnotationValue(rateLimitIdentityLegacy))
+	assertErr(t, validateRateLimitIdentityAnnotationValue("bogus"))
 }
 
 func TestMaaSSubscriptionValidator_ValidateUpdateOrganizationAssociation(t *testing.T) {

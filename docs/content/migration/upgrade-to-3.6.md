@@ -20,6 +20,8 @@ Subscriptions **created after** the 3.6 controller is running are stamped `…/r
 
 Delete-and-recreate of an old subscription is treated as a **new** CR: it opts into short IDs and starts a **fresh** Limitador counter for that subscription. In-place spec edits do not migrate identity.
 
+Explicitly setting `maas.opendatahub.io/rate-limit-identity` from `short` to `legacy` (or the reverse) is allowed as an operator escape hatch, but **also resets that subscription’s in-window Limitador counter** because the TRLP predicate and counter expression change. Unknown annotation values are rejected by the validating webhook.
+
 ## Trade-off: size savings only accrue on new subscriptions
 
 Short IDs exist to keep long `namespace/name@modelNs/model` strings out of Kuadrant WASM / EnvoyFilter predicates (the ~1.5 MiB object-size problem). Grandfathering existing CRs buys quota continuity at the cost of that size win:

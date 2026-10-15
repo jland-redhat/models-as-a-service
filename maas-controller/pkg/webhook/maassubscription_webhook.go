@@ -62,14 +62,20 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maa
 		return nil, fmt.Errorf("%s", message)
 	}
 
+	if err := validateRateLimitIdentityAnnotationValue(rateLimitIdentityAnnotation(sub)); err != nil {
+		return nil, err
+	}
+
 	return nil, nil
 }
 
 // ValidateUpdate validates MaaSSubscription on update.
 // Namespace cannot be changed on update (Kubernetes enforces this).
-// Rejects removal of a stamped rate-limit identity annotation so TRLP
-// matching cannot silently flip short→legacy and reset in-window quotas.
-// Also rejects changes to a previously set organization.id association.
+// Rejects removal or unknown values of a stamped rate-limit identity
+// annotation so TRLP matching cannot silently flip short↔legacy and reset
+// in-window quotas. Explicit short↔legacy remains allowed (documented
+// quota-reset opt-in). Also rejects changes to a previously set
+// organization.id association.
 func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
 	if err := validateRateLimitIdentityAnnotationSticky(oldObj, newObj); err != nil {
 		return nil, err
@@ -91,7 +97,27 @@ func rateLimitIdentityAnnotation(sub *maasv1alpha1.MaaSSubscription) string {
 	return sub.Annotations[annotationRateLimitIdentity]
 }
 
+func validateRateLimitIdentityAnnotationValue(val string) error {
+	if val == "" {
+		return nil
+	}
+	switch val {
+	case rateLimitIdentityShort, rateLimitIdentityLegacy:
+		return nil
+	default:
+		return fmt.Errorf(
+			"annotation %q must be %q or %q (got %q)",
+			annotationRateLimitIdentity, rateLimitIdentityShort, rateLimitIdentityLegacy, val,
+		)
+	}
+}
+
 func validateRateLimitIdentityAnnotationSticky(oldObj, newObj *maasv1alpha1.MaaSSubscription) error {
+	newVal := rateLimitIdentityAnnotation(newObj)
+	if err := validateRateLimitIdentityAnnotationValue(newVal); err != nil {
+		return err
+	}
+
 	oldVal := rateLimitIdentityAnnotation(oldObj)
 	switch oldVal {
 	case rateLimitIdentityShort, rateLimitIdentityLegacy:
@@ -99,7 +125,6 @@ func validateRateLimitIdentityAnnotationSticky(oldObj, newObj *maasv1alpha1.MaaS
 	default:
 		return nil
 	}
-	newVal := rateLimitIdentityAnnotation(newObj)
 	if newVal == "" {
 		return fmt.Errorf(
 			"annotation %q cannot be removed once set to %q (changing to %q or %q is allowed)",
