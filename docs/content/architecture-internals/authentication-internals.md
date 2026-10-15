@@ -22,7 +22,7 @@ Today’s pipeline does **not** drive TokenRateLimitPolicy by splitting group me
      Kept for telemetry and debugging, and still the **rate-limit identity** for subscriptions that existed before the short-ID rollout.
    - **`selected_subscription_id`** — first 16 hex chars of SHA-256 over that key (from
      maas-api `subscription-info.rateLimitId`). Set only when the selected MaaSSubscription
-     is annotated `maas.opendatahub.io/rate-limit-identity=short` (created after upgrade).
+     has `status.rateLimitIdentity=short` (created after upgrade).
      Also mirrored as response header **`X-MaaS-Subscription-Rate-Limit-Id`** without replacing
      existing headers.
 

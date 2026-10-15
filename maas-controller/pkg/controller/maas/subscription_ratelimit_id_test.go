@@ -28,9 +28,6 @@ func TestSubscriptionRateLimitID_KnownVector(t *testing.T) {
 func TestClassifiedRateLimitIdentity(t *testing.T) {
 	t.Parallel()
 
-	shortAnn := map[string]string{AnnotationRateLimitIdentity: RateLimitIdentityShort}
-	legacyAnn := map[string]string{AnnotationRateLimitIdentity: RateLimitIdentityLegacy}
-
 	tests := []struct {
 		name string
 		sub  *maasv1alpha1.MaaSSubscription
@@ -43,9 +40,6 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			want: RateLimitIdentityShort,
 		},
 		{
-			// Also the hazard if a stamped short annotation is removed after
-			// status exists: classification flips to legacy and TRLP keys change.
-			// The validating webhook rejects that removal.
 			name: "surviving CR with phase is legacy",
 			sub: &maasv1alpha1.MaaSSubscription{
 				Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
@@ -62,25 +56,71 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			want: RateLimitIdentityLegacy,
 		},
 		{
-			name: "explicit short wins over status",
+			name: "sticky status short wins over phase",
 			sub: &maasv1alpha1.MaaSSubscription{
-				ObjectMeta: metav1.ObjectMeta{Annotations: shortAnn},
-				Status:     maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{
+					Phase:             maasv1alpha1.PhaseActive,
+					RateLimitIdentity: RateLimitIdentityShort,
+				},
 			},
 			want: RateLimitIdentityShort,
 		},
 		{
-			name: "explicit legacy wins on empty status",
+			name: "sticky status legacy on empty phase",
 			sub: &maasv1alpha1.MaaSSubscription{
-				ObjectMeta: metav1.ObjectMeta{Annotations: legacyAnn},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{
+					RateLimitIdentity: RateLimitIdentityLegacy,
+				},
 			},
 			want: RateLimitIdentityLegacy,
 		},
 		{
-			// Status can land before the sticky annotation on a brand-new CR.
+			name: "spec short overrides sticky legacy status",
+			sub: &maasv1alpha1.MaaSSubscription{
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: RateLimitIdentityShort},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{
+					Phase:             maasv1alpha1.PhaseActive,
+					RateLimitIdentity: RateLimitIdentityLegacy,
+				},
+			},
+			want: RateLimitIdentityShort,
+		},
+		{
+			name: "spec legacy overrides sticky short status",
+			sub: &maasv1alpha1.MaaSSubscription{
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: RateLimitIdentityLegacy},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{
+					RateLimitIdentity: RateLimitIdentityShort,
+				},
+			},
+			want: RateLimitIdentityLegacy,
+		},
+		{
+			name: "legacy annotation migrates when status unset",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{AnnotationRateLimitIdentity: RateLimitIdentityLegacy},
+				},
+			},
+			want: RateLimitIdentityLegacy,
+		},
+		{
+			name: "status wins over stale annotation",
+			sub: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{AnnotationRateLimitIdentity: RateLimitIdentityLegacy},
+				},
+				Status: maasv1alpha1.MaaSSubscriptionStatus{
+					RateLimitIdentity: RateLimitIdentityShort,
+				},
+			},
+			want: RateLimitIdentityShort,
+		},
+		{
+			// Status can land before the sticky identity on a brand-new CR.
 			// Creation after process start must stay short so TRLP does not
 			// grandfather new subscriptions onto selected_subscription_key.
-			name: "post-start CR with status but no annotation is short",
+			name: "post-start CR with status but no identity is short",
 			sub: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					CreationTimestamp: metav1.NewTime(rateLimitIdentityEpoch.Add(time.Minute)),
@@ -90,7 +130,7 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			want: RateLimitIdentityShort,
 		},
 		{
-			name: "pre-start CR with status but no annotation is legacy",
+			name: "pre-start CR with status but no identity is legacy",
 			sub: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					CreationTimestamp: metav1.NewTime(rateLimitIdentityEpoch.Add(-time.Hour)),
@@ -126,26 +166,6 @@ func TestClassifiedRateLimitIdentity(t *testing.T) {
 			assert.Equal(t, tc.want, classifiedRateLimitIdentity(tc.sub))
 		})
 	}
-}
-
-func TestStampRateLimitIdentityAnnotation_Sticky(t *testing.T) {
-	t.Parallel()
-
-	fresh := &maasv1alpha1.MaaSSubscription{}
-	assert.True(t, stampRateLimitIdentityAnnotation(fresh))
-	assert.Equal(t, RateLimitIdentityShort, fresh.Annotations[AnnotationRateLimitIdentity])
-	assert.False(t, stampRateLimitIdentityAnnotation(fresh), "must not rewrite a set annotation")
-
-	legacy := &maasv1alpha1.MaaSSubscription{
-		Status: maasv1alpha1.MaaSSubscriptionStatus{Phase: maasv1alpha1.PhaseActive},
-	}
-	assert.True(t, stampRateLimitIdentityAnnotation(legacy))
-	assert.Equal(t, RateLimitIdentityLegacy, legacy.Annotations[AnnotationRateLimitIdentity])
-
-	// Later status must not flip a short annotation to legacy.
-	fresh.Status.Phase = maasv1alpha1.PhaseActive
-	assert.False(t, stampRateLimitIdentityAnnotation(fresh))
-	assert.Equal(t, RateLimitIdentityShort, fresh.Annotations[AnnotationRateLimitIdentity])
 }
 
 func trlpRateLimitPredicate(subNS, subName, modelNS, modelName string) string {

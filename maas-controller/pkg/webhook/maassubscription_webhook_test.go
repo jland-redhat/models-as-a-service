@@ -69,14 +69,14 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 			errContains: "not enabled for MaaS tenant resources",
 		},
 		{
-			name: "allow create with short rate-limit identity",
+			name: "allow create with short rate-limit identity spec",
 			subscription: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sub",
 					Namespace: "ai-tenant-redteam",
-					Annotations: map[string]string{
-						annotationRateLimitIdentity: rateLimitIdentityShort,
-					},
+				},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					RateLimitIdentity: rateLimitIdentityShort,
 				},
 			},
 			tenant: &maasv1alpha1.Tenant{
@@ -88,14 +88,14 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "reject create with unknown rate-limit identity",
+			name: "reject create with unknown rate-limit identity spec",
 			subscription: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sub",
 					Namespace: "ai-tenant-redteam",
-					Annotations: map[string]string{
-						annotationRateLimitIdentity: "bogus",
-					},
+				},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					RateLimitIdentity: "bogus",
 				},
 			},
 			tenant: &maasv1alpha1.Tenant{
@@ -105,7 +105,7 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 				},
 			},
 			wantErr:     true,
-			errContains: annotationRateLimitIdentity,
+			errContains: "spec.rateLimitIdentity",
 		},
 	}
 
@@ -154,17 +154,16 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
-	withAnn := func(v string) *maasv1alpha1.MaaSSubscription {
-		sub := &maasv1alpha1.MaaSSubscription{
+	withIdentity := func(v string) *maasv1alpha1.MaaSSubscription {
+		return &maasv1alpha1.MaaSSubscription{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "test-sub",
 				Namespace: "ai-tenant-test",
 			},
+			Spec: maasv1alpha1.MaaSSubscriptionSpec{
+				RateLimitIdentity: v,
+			},
 		}
-		if v != "" {
-			sub.Annotations = map[string]string{annotationRateLimitIdentity: v}
-		}
-		return sub
 	}
 
 	tests := []struct {
@@ -175,28 +174,26 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 		errContains string
 	}{
 		{
-			name: "update without identity annotation",
-			old:  withAnn(""),
-			new:  withAnn(""),
+			name: "update without identity spec",
+			old:  withIdentity(""),
+			new:  withIdentity(""),
 		},
 		{
 			name: "allow short to legacy opt-in",
-			old:  withAnn(rateLimitIdentityShort),
-			new:  withAnn(rateLimitIdentityLegacy),
+			old:  withIdentity(rateLimitIdentityShort),
+			new:  withIdentity(rateLimitIdentityLegacy),
 		},
 		{
-			name:        "reject short identity removal",
-			old:         withAnn(rateLimitIdentityShort),
-			new:         withAnn(""),
-			wantErr:     true,
-			errContains: annotationRateLimitIdentity,
+			name: "allow clearing identity spec (status remains sticky)",
+			old:  withIdentity(rateLimitIdentityShort),
+			new:  withIdentity(""),
 		},
 		{
-			name:        "reject short to garbage via ValidateUpdate",
-			old:         withAnn(rateLimitIdentityShort),
-			new:         withAnn("bogus"),
+			name:        "reject garbage identity via ValidateUpdate",
+			old:         withIdentity(rateLimitIdentityShort),
+			new:         withIdentity("bogus"),
 			wantErr:     true,
-			errContains: annotationRateLimitIdentity,
+			errContains: "spec.rateLimitIdentity",
 		},
 	}
 
@@ -213,60 +210,7 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 	}
 }
 
-func TestValidateRateLimitIdentityAnnotationSticky(t *testing.T) {
-	t.Parallel()
-
-	withAnn := func(v string) *maasv1alpha1.MaaSSubscription {
-		sub := &maasv1alpha1.MaaSSubscription{
-			ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"},
-		}
-		if v != "" {
-			sub.Annotations = map[string]string{annotationRateLimitIdentity: v}
-		}
-		return sub
-	}
-
-	tests := []struct {
-		name    string
-		old     *maasv1alpha1.MaaSSubscription
-		new     *maasv1alpha1.MaaSSubscription
-		wantErr bool
-	}{
-		{name: "unset stays unset", old: withAnn(""), new: withAnn(""), wantErr: false},
-		{name: "controller may stamp short", old: withAnn(""), new: withAnn(rateLimitIdentityShort), wantErr: false},
-		{name: "controller may stamp legacy", old: withAnn(""), new: withAnn(rateLimitIdentityLegacy), wantErr: false},
-		{name: "short stays short", old: withAnn(rateLimitIdentityShort), new: withAnn(rateLimitIdentityShort), wantErr: false},
-		{name: "legacy may opt into short", old: withAnn(rateLimitIdentityLegacy), new: withAnn(rateLimitIdentityShort), wantErr: false},
-		{name: "short may switch to legacy", old: withAnn(rateLimitIdentityShort), new: withAnn(rateLimitIdentityLegacy), wantErr: false},
-		{name: "reject short removal", old: withAnn(rateLimitIdentityShort), new: withAnn(""), wantErr: true},
-		{name: "reject legacy removal", old: withAnn(rateLimitIdentityLegacy), new: withAnn(""), wantErr: true},
-		{name: "reject short to garbage", old: withAnn(rateLimitIdentityShort), new: withAnn("bogus"), wantErr: true},
-		{name: "reject legacy to garbage", old: withAnn(rateLimitIdentityLegacy), new: withAnn("garbage"), wantErr: true},
-		{name: "reject unset to garbage", old: withAnn(""), new: withAnn("nope"), wantErr: true},
-		{
-			name: "reject short removal via nil annotations map",
-			old:  withAnn(rateLimitIdentityShort),
-			new: &maasv1alpha1.MaaSSubscription{
-				ObjectMeta: metav1.ObjectMeta{Name: "sub", Namespace: "ns"},
-			},
-			wantErr: true,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			err := validateRateLimitIdentityAnnotationSticky(tc.old, tc.new)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("error = %v, wantErr %v", err, tc.wantErr)
-			}
-			if tc.wantErr && err != nil && !contains(err.Error(), annotationRateLimitIdentity) {
-				t.Fatalf("error = %v, want annotation name in message", err)
-			}
-		})
-	}
-}
-
-func TestValidateRateLimitIdentityAnnotationValue(t *testing.T) {
+func TestValidateRateLimitIdentitySpec(t *testing.T) {
 	t.Parallel()
 	assertNil := func(t *testing.T, err error) {
 		t.Helper()
@@ -280,10 +224,17 @@ func TestValidateRateLimitIdentityAnnotationValue(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	}
-	assertNil(t, validateRateLimitIdentityAnnotationValue(""))
-	assertNil(t, validateRateLimitIdentityAnnotationValue(rateLimitIdentityShort))
-	assertNil(t, validateRateLimitIdentityAnnotationValue(rateLimitIdentityLegacy))
-	assertErr(t, validateRateLimitIdentityAnnotationValue("bogus"))
+	assertNil(t, validateRateLimitIdentitySpec(nil))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{}))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: rateLimitIdentityShort},
+	}))
+	assertNil(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: rateLimitIdentityLegacy},
+	}))
+	assertErr(t, validateRateLimitIdentitySpec(&maasv1alpha1.MaaSSubscription{
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{RateLimitIdentity: "bogus"},
+	}))
 }
 
 func TestMaaSSubscriptionValidator_ValidateUpdateOrganizationAssociation(t *testing.T) {

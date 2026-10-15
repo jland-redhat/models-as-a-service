@@ -2126,7 +2126,7 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 	}
 }
 
-func TestSelect_RateLimitIDOnlyForShortAnnotation(t *testing.T) {
+func TestSelect_RateLimitIDOnlyForShortIdentity(t *testing.T) {
 	log := logger.New(false)
 	requestedModel := "ns1/model-a"
 
@@ -2136,7 +2136,13 @@ func TestSelect_RateLimitIDOnlyForShortAnnotation(t *testing.T) {
 	fresh := createSubscriptionWithModelRefs("fresh-sub", []string{"g1"}, []map[string]any{
 		{"name": "model-a", "namespace": "ns1"},
 	})
-	fresh.SetAnnotations(map[string]string{constant.AnnotationRateLimitIdentity: constant.RateLimitIdentityShort})
+	if status, ok := fresh.Object["status"].(map[string]any); ok {
+		status["rateLimitIdentity"] = constant.RateLimitIdentityShort
+	} else {
+		fresh.Object["status"] = map[string]any{
+			"rateLimitIdentity": constant.RateLimitIdentityShort,
+		}
+	}
 
 	t.Run("legacy omits rateLimitId", func(t *testing.T) {
 		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{legacy}}, nil, nil)
@@ -2149,7 +2155,7 @@ func TestSelect_RateLimitIDOnlyForShortAnnotation(t *testing.T) {
 		}
 	})
 
-	t.Run("short annotation returns rateLimitId", func(t *testing.T) {
+	t.Run("short status returns rateLimitId", func(t *testing.T) {
 		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{fresh}}, nil, nil)
 		result, err := selector.Select([]string{"g1"}, "", "", requestedModel)
 		if err != nil {

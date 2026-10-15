@@ -17,12 +17,7 @@ func TestRateLimitID_KnownVector(t *testing.T) {
 }
 
 func TestUsesShortRateLimitID(t *testing.T) {
-	assert.False(t, subscription.UsesShortRateLimitID(nil))
-	assert.False(t, subscription.UsesShortRateLimitID(map[string]string{}))
-	assert.False(t, subscription.UsesShortRateLimitID(map[string]string{
-		constant.AnnotationRateLimitIdentity: constant.RateLimitIdentityLegacy,
-	}))
-	assert.True(t, subscription.UsesShortRateLimitID(map[string]string{
-		constant.AnnotationRateLimitIdentity: constant.RateLimitIdentityShort,
-	}))
+	assert.False(t, subscription.UsesShortRateLimitID(""))
+	assert.False(t, subscription.UsesShortRateLimitID(constant.RateLimitIdentityLegacy))
+	assert.True(t, subscription.UsesShortRateLimitID(constant.RateLimitIdentityShort))
 }

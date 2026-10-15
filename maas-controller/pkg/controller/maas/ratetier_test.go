@@ -217,11 +217,11 @@ func TestMaaSSubscriptionReconciler_ExistingSubKeepsKeyIdentity(t *testing.T) {
 	if err := c.Get(t.Context(), types.NamespacedName{Name: "new-sub", Namespace: namespace}, &gotNew); err != nil {
 		t.Fatalf("Get new-sub: %v", err)
 	}
-	if gotOld.Annotations[AnnotationRateLimitIdentity] != RateLimitIdentityLegacy {
-		t.Errorf("old-sub annotation = %q, want %q", gotOld.Annotations[AnnotationRateLimitIdentity], RateLimitIdentityLegacy)
+	if gotOld.Status.RateLimitIdentity != RateLimitIdentityLegacy {
+		t.Errorf("old-sub status.rateLimitIdentity = %q, want %q", gotOld.Status.RateLimitIdentity, RateLimitIdentityLegacy)
 	}
-	if gotNew.Annotations[AnnotationRateLimitIdentity] != RateLimitIdentityShort {
-		t.Errorf("new-sub annotation = %q, want %q", gotNew.Annotations[AnnotationRateLimitIdentity], RateLimitIdentityShort)
+	if gotNew.Status.RateLimitIdentity != RateLimitIdentityShort {
+		t.Errorf("new-sub status.rateLimitIdentity = %q, want %q", gotNew.Status.RateLimitIdentity, RateLimitIdentityShort)
 	}
 
 	trlp := &unstructured.Unstructured{}

@@ -50,8 +50,9 @@ func RateLimitIDFor(subNamespace, subName, resolvedModel string) string {
 }
 
 // UsesShortRateLimitID reports whether select should return rateLimitId.
-// Only an explicit "short" annotation opts in; missing or "legacy" keeps
-// pre-upgrade selected_subscription_key matching so live quotas are not reset.
-func UsesShortRateLimitID(annotations map[string]string) bool {
-	return annotations[constant.AnnotationRateLimitIdentity] == constant.RateLimitIdentityShort
+// Only an explicit "short" status (or legacy annotation fallback) opts in;
+// missing or "legacy" keeps pre-upgrade selected_subscription_key matching
+// so live quotas are not reset.
+func UsesShortRateLimitID(identity string) bool {
+	return identity == constant.RateLimitIdentityShort
 }

@@ -466,18 +466,21 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
-	// Stamp sticky rate-limit identity before AddFinalizer so classification
-	// can treat an already-persisted cleanup finalizer as evidence the CR
-	// survived an upgrade (legacy). New CRs get short IDs; upgraded CRs keep
-	// selected_subscription_key.
-	needsUpdate := stampRateLimitIdentityAnnotation(subscription)
+	// Classify sticky rate-limit identity before AddFinalizer so a brand-new
+	// CR is not mistaken for an upgrade survivor. Persist the result on
+	// status (GitOps-safe) before TRLP work so maas-api and peer reconciles
+	// see the same scheme.
+	wantIdentity := classifiedRateLimitIdentity(subscription)
 	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
-		needsUpdate = true
-	}
-	if needsUpdate {
 		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err
+		}
+	}
+	if subscription.Status.RateLimitIdentity != wantIdentity {
+		subscription.Status.RateLimitIdentity = wantIdentity
+		if err := r.Status().Update(ctx, subscription); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to persist rateLimitIdentity: %w", err)
 		}
 	}
 

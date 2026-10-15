@@ -53,8 +53,8 @@ type SelectResponse struct {
 	// with namespace/name, to derive RateLimitID for TokenRateLimitPolicy matching.
 	ResolvedModel string `json:"resolvedModel,omitempty"`
 	// RateLimitID is a short stable hash of namespace/name@resolvedModel, set
-	// only for subscriptions created after the short-ID rollout (annotation
-	// maas.opendatahub.io/rate-limit-identity=short). AuthPolicy copies it to
+	// only for subscriptions created after the short-ID rollout
+	// (status.rateLimitIdentity=short). AuthPolicy copies it to
 	// auth.identity.selected_subscription_id. Pre-upgrade subscriptions omit
 	// this field and keep matching on selected_subscription_key.
 	RateLimitID string `json:"rateLimitId,omitempty"`
