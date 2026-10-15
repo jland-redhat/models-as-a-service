@@ -68,6 +68,45 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 			wantErr:     true,
 			errContains: "not enabled for MaaS tenant resources",
 		},
+		{
+			name: "allow create with short rate-limit identity",
+			subscription: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sub",
+					Namespace: "ai-tenant-redteam",
+					Annotations: map[string]string{
+						annotationRateLimitIdentity: rateLimitIdentityShort,
+					},
+				},
+			},
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-redteam",
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "reject create with unknown rate-limit identity",
+			subscription: &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-sub",
+					Namespace: "ai-tenant-redteam",
+					Annotations: map[string]string{
+						annotationRateLimitIdentity: "bogus",
+					},
+				},
+			},
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "ai-tenant-redteam",
+				},
+			},
+			wantErr:     true,
+			errContains: annotationRateLimitIdentity,
+		},
 	}
 
 	for _, tt := range tests {
@@ -115,24 +154,62 @@ func TestMaaSSubscriptionValidator_ValidateUpdate(t *testing.T) {
 		},
 	}
 
-	oldSub := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sub",
-			Namespace: "ai-tenant-test",
+	withAnn := func(v string) *maasv1alpha1.MaaSSubscription {
+		sub := &maasv1alpha1.MaaSSubscription{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "test-sub",
+				Namespace: "ai-tenant-test",
+			},
+		}
+		if v != "" {
+			sub.Annotations = map[string]string{annotationRateLimitIdentity: v}
+		}
+		return sub
+	}
+
+	tests := []struct {
+		name        string
+		old         *maasv1alpha1.MaaSSubscription
+		new         *maasv1alpha1.MaaSSubscription
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "update without identity annotation",
+			old:  withAnn(""),
+			new:  withAnn(""),
+		},
+		{
+			name: "allow short to legacy opt-in",
+			old:  withAnn(rateLimitIdentityShort),
+			new:  withAnn(rateLimitIdentityLegacy),
+		},
+		{
+			name:        "reject short identity removal",
+			old:         withAnn(rateLimitIdentityShort),
+			new:         withAnn(""),
+			wantErr:     true,
+			errContains: annotationRateLimitIdentity,
+		},
+		{
+			name:        "reject short to garbage via ValidateUpdate",
+			old:         withAnn(rateLimitIdentityShort),
+			new:         withAnn("bogus"),
+			wantErr:     true,
+			errContains: annotationRateLimitIdentity,
 		},
 	}
 
-	newSub := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-sub",
-			Namespace: "ai-tenant-test",
-		},
-	}
-
-	// Update should not validate namespace (it's immutable)
-	_, err := validator.ValidateUpdate(context.Background(), oldSub, newSub)
-	if err != nil {
-		t.Errorf("ValidateUpdate() unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := validator.ValidateUpdate(context.Background(), tt.old, tt.new)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ValidateUpdate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.errContains != "" && (err == nil || !contains(err.Error(), tt.errContains)) {
+				t.Fatalf("ValidateUpdate() error = %v, want error containing %q", err, tt.errContains)
+			}
+		})
 	}
 }
 

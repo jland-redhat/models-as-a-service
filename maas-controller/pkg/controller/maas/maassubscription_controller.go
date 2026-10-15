@@ -470,10 +470,7 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// can treat an already-persisted cleanup finalizer as evidence the CR
 	// survived an upgrade (legacy). New CRs get short IDs; upgraded CRs keep
 	// selected_subscription_key.
-	needsUpdate := false
-	if stampRateLimitIdentityAnnotation(subscription) {
-		needsUpdate = true
-	}
+	needsUpdate := stampRateLimitIdentityAnnotation(subscription)
 	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
 		needsUpdate = true

@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"time"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -84,10 +85,8 @@ func classifiedRateLimitIdentity(sub *maasv1alpha1.MaaSSubscription) string {
 			return sub.Annotations[AnnotationRateLimitIdentity]
 		}
 	}
-	for _, f := range sub.Finalizers {
-		if f == maasSubscriptionFinalizer {
-			return RateLimitIdentityLegacy
-		}
+	if slices.Contains(sub.Finalizers, maasSubscriptionFinalizer) {
+		return RateLimitIdentityLegacy
 	}
 	if sub.Status.Phase == "" && len(sub.Status.Conditions) == 0 {
 		return RateLimitIdentityShort
