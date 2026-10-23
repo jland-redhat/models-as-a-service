@@ -41,10 +41,11 @@ Without that split, teams conflate prepaid wallets, calendar quotas, and per-mod
 
 - One declarative place for rate card + allotment: `MaaSSubscription`.
 - **Observe-only** cost attribution when all models have `pricing`; no enforcement required for showback alone.
-- Optional **hard** period cap (default when allotment is set) and optional **soft** threshold (notifications / Praxis-aligned soft limit semantics).
+- Explicit **`enforcement`**: `hard` | `soft` on the allotment (maps to backend hard deny vs soft over-quota signal). Prefer product default of `hard` when unset only if API review allows a default; otherwise require the field.
+- Optional **alerts** (e.g. threshold percentages) — backend-dependent; do not overload `enforcement` with alert thresholds.
 - Enforcement key: **`userId` + `subscriptionId`** (service accounts treated as human-equivalent identities).
 - Period length required when allotment is set; docs recommend **30d** as the default example (not a silent product default that hides misconfiguration).
-- Renewal modes for unused allotment at period boundary: **`drain`** | **`rollover`** (wallet mode not in v1).
+- Renewal as a nested object: **`mode`** (`drain` | `rollover`) + **`period`** (wallet mode not in v1; optional `anchor` / `max_carry` as backend allows).
 - Cross-subscription pools are **BYO** (operator wires external systems); not a first-class MaaS CR in v1.
 - Disable / remove allotment: follow backend-compatible teardown (no orphan counters).
 
@@ -95,14 +96,20 @@ spec:
         unit: USD  # illustrative; must match the subscription accounting unit
         amount: "0.002"
   budgetPolicy:
-    amount: "200"           # allotment in same money unit as pricing
-    period: 30d             # required when budgetPolicy present
-    softLimit: "160"        # optional; notify / soft semantics (Praxis-aligned)
-    # hard limit = amount (default when policy present)
-    renewal: drain          # drain | rollover
+    limit: "200"            # allotment in same unit as pricing (here USD)
+    renewal:
+      mode: drain           # drain | rollover
+      period: 30d           # required when budgetPolicy present
+      # anchor: "2026-01-01T00:00:00Z"  # optional; UTC period anchor
+      # max_carry: "100"               # optional; rollover only
+    enforcement: hard       # hard | soft (required with budgetPolicy, or default hard)
+    # alerts:               # optional; backend-dependent
+    #   thresholds: [80, 100]
 ```
 
-- **Hard** by default at `amount` when `budgetPolicy` is set; **softLimit** optional.
+Shape intentionally tracks a Tokenomics-style budget (`limit`, nested `renewal`, `enforcement`, optional `alerts`) so reconcile is a mapping, not a redesign. MaaS may omit backend-only fields (`costs` references, named budget catalogs) until needed.
+
+- **`enforcement`** is first-class (`hard` | `soft`); do not encode soft-only behavior as a separate `softLimit` money field.
 - Counters / admit path: **lazy seed** on first use (no eager per-user rows for every possible user).
 - Reconciliation publishes policy into the chosen enforcement backend; **publish path** details are an open implementation question (see below).
 
@@ -148,7 +155,7 @@ Many items below are **backend-dependent**. Working assumption: enforcement back
 | A4 | **Publish / reconcile path** | Controller must push subscription policy into the backend | Backend + MaaS | ConfigMap/YAML? API? CR watch? Idempotent revisions? Migration when budgets reassign? |
 | A5 | **Period, anchor, timezone** | Fixed duration first; calendar parked | Backend | #32: fixed duration + UTC anchor; calendar-month out of first iteration (`30d` ≠ calendar month). Unpark calendar only when backend supports it |
 | A6 | **Renewal details** | drain \| rollover locked at product level; edge cases are backend | Backend | #32: no default; optional `max_carry` on rollover; debt/holds across boundaries. Does MaaS surface `max_carry` / anchor in CRD v1? |
-| A7 | **Hard vs soft semantics** | Soft = notify / over-quota signal, not a second product | Backend | #32: soft continues with trusted over-quota metadata; still reserves/settles; soft does **not** bypass store failures. Align `softLimit` field with alerts vs soft enforcement |
+| A7 | **Hard vs soft semantics** | Soft = over-quota signal / continue, not a second product | Backend | Map `budgetPolicy.enforcement` to backend hard/soft. Soft still reserves/settles and does **not** bypass store failures. Optional `alerts` vs soft enforcement — keep distinct |
 | A8 | **Fail-open vs fail-closed** | Must be explicit before GA | Backend | #32 matrix: untrustworthy accounting → block new admission (`503`), preserve in-flight responses after dispatch. Confirm product wording (not classic “fail-open”) |
 | A9 | **Remaining / reporting limit (current quota)** | Portal and operators need “how much left?” | Backend | Reporting a tenant’s current quota/remaining should be an explicit backend capability. MaaS portal reads backend; no MaaS remaining DB |
 | A10 | **Observe-only / reporting without budgets** | Prices without allotment | Backend | #32: reporting without budget engine is an explicit pipeline choice. Map MaaS “all models priced ⇒ observe” onto that path |
@@ -160,7 +167,7 @@ Many items below are **backend-dependent**. Working assumption: enforcement back
 
 | # | Topic | Why open | Notes |
 | --- | --- | --- | --- |
-| B1 | **Exact CRD field names** | Sketch only (`budgetPolicy`, `softLimit`, `renewal`) | API review; prefer names that map cleanly to backend without leaking store internals |
+| B1 | **Exact CRD field names** | Sketch only (`limit`, nested `renewal`, `enforcement`, optional `alerts`) | API review; prefer names that map cleanly to backend (`limit`/`renewal.mode`/`enforcement`) without leaking store internals |
 | B2 | **All-or-nothing pricing UX** | Reject unpriced model add vs require completing card | Validation rules and status messages on `MaaSSubscription` |
 | B3 | **Docs-default period (30d)** | Required field; docs example vs silent default | Keep required; document 30d as recommendation |
 | B4 | **Portal UX timing** | Show remaining in v1 portal vs later | Depends on A9 existing; product priority only |
