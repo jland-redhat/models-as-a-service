@@ -5,10 +5,12 @@ description: Proposed MaaSSubscription control layer for model rate cards and pe
 
 # Subscription rate card and period allotment (control layer)
 
-!!! note "Proposed design"
-    This document describes a planned control-layer contract. It is not documentation of an implemented feature.
-    Enforcement, counters, renewal, and remaining-quota reads are owned by a gateway / Tokenomics-style backend.
-    Field names in the YAML sketch are illustrative and subject to API review.
+> [!NOTE]
+> **Proposed design**
+>
+> This document describes a planned control-layer contract. It is not documentation of an implemented feature.
+> Enforcement, counters, renewal, and remaining-quota reads are owned by a gateway / Tokenomics-style backend.
+> Field names in the YAML sketch are illustrative and subject to API review.
 
 **Author:** James Land
 
