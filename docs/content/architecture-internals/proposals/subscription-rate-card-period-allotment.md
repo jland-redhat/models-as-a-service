@@ -92,7 +92,7 @@ spec:
   modelRefs:
     - name: llama-3
       pricing:
-        unit: usd_per_1k_tokens  # illustrative
+        unit: USD  # illustrative; must match the subscription accounting unit
         amount: "0.002"
   budgetPolicy:
     amount: "200"           # allotment in same money unit as pricing
