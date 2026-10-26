@@ -1,6 +1,6 @@
 ---
 title: Subscription rate card and period allotment (control layer)
-description: Proposed MaaSSubscription control layer for model rate cards and period spend allotments, with enforcement delegated to a Tokenomics-shaped backend.
+description: Proposed MaaS control layer for per-token-type pricing (ModelRef defaults, subscription overrides) and period budgets for metering.
 ---
 
 # Subscription rate card and period allotment (control layer)
@@ -9,178 +9,454 @@ description: Proposed MaaSSubscription control layer for model rate cards and pe
 > **Proposed design**
 >
 > This document describes a planned control-layer contract. It is not documentation of an implemented feature.
-> Enforcement, counters, renewal, and remaining-quota reads are owned by a gateway / Tokenomics-style backend.
-> Field names in the YAML sketch are illustrative and subject to API review.
+> Field names in the YAML sketches are illustrative and subject to API review.
+>
+> The design is **optimistic**: it describes the product shape we want for operators. Parts of it — especially period forms (calendar month / timezone / start day), reservation estimate rules, remaining-budget API freshness, and profile/`costExpr` evaluation — **may need to be narrowed or staged** based on what the gateway / metering backend can deliver in a given release. Prefer adapting the control-layer mapping to backend capability over inventing a parallel ledger in MaaS.
 
 **Author:** James Land
 
-**Date:** 2026-10-22
+**Date:** 2026-10-22 (pricing revision 2026-10-26)
 
-**Scope:** Models-as-a-Service control plane (`MaaSSubscription`); AI Gateway / Praxis Tokenomics-shaped enforcement backend
-
-**Related:** [Tokenomics: API + Capabilities (praxis-proxy/enhancements#32)](https://github.com/praxis-proxy/enhancements/pull/32)
+**Scope:** Models-as-a-Service control plane (`MaaSModelRef`, `MaaSSubscription`); gateway metering / enforcement backend (implementation TBD)
 
 ## What
 
-Add a **control layer** on `MaaSSubscription` that:
+This document defines the **control layer** customers use to declare metering policies — what a call is worth for showback / cost attribution, and how much an identity may spend in a period — so those policies can be reconciled into the gateway metering / enforcement backend.
 
-1. Declares an optional **rate card** (`pricing` on each `modelRef`) used for showback / cost attribution when every model on the subscription is priced.
-2. Declares an optional **period allotment** (`budgetPolicy`) — a spend cap for a fixed duration window, with renewal behavior (`drain` | `rollover`).
-3. Leaves **enforcement and counters** to a pluggable gateway / metering backend (implementation TBD). MaaS owns the declarative contract and reconciliation into that backend; MaaS does **not** become the durable “remaining budget” database in v1.
+**Working assumptions**
+
+- **Pricing capture and defaults** live on **`MaaSModelRef`** (which token types to read from the inference `usage` object, and optional default rates).
+- **Reservation estimate defaults** also live on **`MaaSModelRef`** (`max_tokens` vs static hold) because they follow the model’s API shape; **`MaaSSubscription` may override** per entitlement.
+- **Budget policy** (and optional **price overrides**) live by **extending `MaaSSubscription`**, rather than introducing a separate first-class budget CR as the centralized driver for metering.
+- Enforcement, counters, and remaining-balance storage stay with the pluggable backend — MaaS does not become the durable budget database in v1.
 
 ## Why
 
 Operators need a clear split between:
 
-- **How much does a call cost?** (rate card / showback)
-- **How much may this identity spend in a window?** (allotment / FinOps cap)
+- **How much does a call cost?** (rate card / showback — per model and per billable unit)
+- **How much may this identity spend in a window?** (budget / FinOps cap)
 
-Without that split, teams conflate prepaid wallets, calendar quotas, and per-model prices. MaaS v1 targets **period allotment** (fixed-duration spend cap with renewal) as the enterprise-default path. Prepaid **wallet** UX (admin top-up / auto-refill) is deferred.
+Without that split, teams conflate prepaid wallets, calendar quotas, and per-model prices. A flat “one price per model” is not enough when input, output, cached, and reasoning tokens (or image / audio / other units) are billed differently. Capture paths also differ by provider, so the model object must say what to meter and where it appears on the response.
+
+That policy must live in the MaaS control layer so it can be propagated to the right place at reconcile time — capture paths, default rates, subscription overrides, and (later) budget — rather than being re-entered or looked up ad hoc in a separate system at request time.
+
+Early design conversations also point to doing cost and budget calculations in the gateway when possible, using counters captured in the gateway proxy, so admission and settle stay on the hot path with the strongest performance. Putting rates and capture definitions in MaaS is what lets the product push a complete, consistent policy into that in-proxy path.
+
 
 ## Goals
 
-- One declarative place for rate card + allotment: `MaaSSubscription`.
-- **Observe-only** cost attribution when all models have `pricing`; no enforcement required for showback alone.
-- Explicit **`enforcement`**: `hard` | `soft` on the allotment (maps to backend hard deny vs soft over-quota signal). Prefer product default of `hard` when unset only if API review allows a default; otherwise require the field.
-- Optional **alerts** (e.g. threshold percentages) — backend-dependent; do not overload `enforcement` with alert thresholds.
-- Enforcement key: **`userId` + `subscriptionId`** (service accounts treated as human-equivalent identities).
-- Period length required when allotment is set; docs recommend **30d** as the default example (not a silent product default that hides misconfiguration).
-- Renewal as a nested object: **`mode`** (`drain` | `rollover`) + **`period`** (wallet mode not in v1; optional `anchor` / `max_carry` as backend allows).
-- Cross-subscription pools are **BYO** (operator wires external systems); not a first-class MaaS CR in v1.
-- Disable / remove allotment: follow backend-compatible teardown (no orphan counters).
+- Declarative pricing and budget policy in MaaS (`MaaSModelRef` + `MaaSSubscription`).
+- Explicit pricing across models and billable units — **token types** (input, output, cached, reasoning, and similar) and **non-token modes** (image, audio, video, per-request, and similar) — with capture from response `usage`, default cost as rate weights (`Σ count × rate`), and optional `costExpr` (or profile default) for overlap / complex cases.
+- Budget on `MaaSSubscription`: spend **limit**, **period** (including calendar month / timezone when the backend supports it), **hard** stop at the limit, and **alert thresholds** as spend approaches that limit.
+- **Reserve-then-settle** admission: hold estimated cost against the budget **before** the upstream response (when true token usage is unknown), then settle to actual cost afterward. Estimate mode defaults on the ModelRef (`max_tokens` or static); subscriptions may override.
+- A **real-time remaining-budget API** (not only observability / Loki) so portal and clients can read spend left for the current window.
 
-## Non-Goals (v1)
+## Non-Goals (for now)
 
-- Prepaid **wallet** product UX (admin top-up, auto-refill, payment-processor-style balance) — deferred to a later design.
-- Calendar-month / timezone-aligned periods — parked; prefer fixed duration until the backend calendar story is clear.
-- MaaS-owned **remaining balance** DB or portal as source of truth.
-- Hierarchical org → team → key pools as first-class CRs.
-- Per-user allotment override beyond the subscription policy.
-- Raising one user’s cap without changing the subscription (parked).
-- Locking the MaaS CRD to a specific store product or a frozen Tokenomics revision. Working assumption is Tokenomics-shaped ([praxis-proxy/enhancements#32](https://github.com/praxis-proxy/enhancements/pull/32)); the contract can and probably will change.
+- Prepaid **wallet** product UX (admin top-up, auto-refill, payment-processor-style balance).
+- MaaS-owned **remaining balance** DB as source of truth (remaining is read from the enforcement backend via API).
+- A separate first-class budget CR as the metering driver (subscription extension is the working assumption).
+- Hierarchical org → team → key pools as first-class CRs (BYO / later).
+- Soft-only budgets that never hard-stop (v1 pairs a hard limit with alerts, matching common peer behavior).
 
 ## Proposed Design
 
-### Backend dependency
+### Pricing (current focus)
 
-| Layer | Owns | Examples |
+Pricing and capture are split across two objects:
+
+| Concern | Object | Role |
 | --- | --- | --- |
-| **MaaS control layer (this proposal)** | Declarative rate card + allotment on `MaaSSubscription`; reconcile/publish into the backend; UX/docs for operators | `modelRef.pricing`, `budgetPolicy`, identity keying intent |
-| **Enforcement backend (assumed Tokenomics-like)** | Admit/reserve/settle, durable counters, renewal at period boundary, hard/soft outcomes, store-failure matrix, remaining-quota reporting APIs | drain/rollover, UTC anchors, soft over-quota signals, 429 vs 503 |
+| Usage shape / capture profile (+ optional overrides) | `MaaSModelRef` | Built-in defaults by model type, with path overrides when needed |
+| Default price per billable unit | `MaaSModelRef` | Catalog / platform default rate card for that model |
+| Default reservation estimate | `MaaSModelRef` | How to bound the pre-response hold for this model (`max_tokens` or static) |
+| Effective price for this entitlement | `MaaSSubscription` | Optional override of ModelRef defaults for models on the subscription |
+| Effective reservation estimate | `MaaSSubscription` | Optional override of ModelRef estimate mode for that model on the entitlement |
+| Budget amount + period + alerts | `MaaSSubscription` | See [Budget](#budget) |
 
-**Backend assumption (not a lock-in):** Enforcement, counters, renewal, fail behavior, soft-limit signals, and “remaining quota” reads are owned by a **gateway / Tokenomics-style backend**, not by the MaaS CRD. The current working assumption is that this backend will look like [praxis-proxy/enhancements#32 (Tokenomics: API + Capabilities)](https://github.com/praxis-proxy/enhancements/pull/32). That proposal is **still iterating** (further revisions are expected before implementation readiness). MaaS field names and reconcile behavior should stay mappable; do not freeze product semantics on any single draft of #32.
+`MaaSModelRef` declares **what** to meter, **default rates**, and **default reservation estimate**. `MaaSSubscription` may **override rates** and **estimate mode** for an entitlement. Subscriptions do not redefine capture.
 
-If the shipped backend differs from today’s #32 draft, prefer **adapting the reconcile mapping** over inventing a second ledger in MaaS. Open questions below mark where MaaS cannot decide alone.
+#### Usage capture profiles
 
-### Rate card
+`MaaSModelRef` gets its capture definition from one of three places. The expanded form is always the same shape: `billableUnits` plus optional `defaultCostExpr` / `costExpr`. A new CRD is intentionally **not** proposed — reuse built-ins, a ConfigMap, or define the profile object **inline on the ModelRef**.
 
-- On each `modelRef`, optional `pricing` (unit + amount). **One unit system** for the subscription (e.g. USD per 1K tokens or per request — exact schema in API review).
-- **All-or-nothing for observe path:** if any model lacks pricing, do not enable subscription-wide observe-only cost path; reject adding unpriced models when pricing mode is already active (or require completing the card).
-- When **all** `modelRef` entries have pricing → **observe-only** showback/cost attribution may run without an allotment.
-- Allotment (`budgetPolicy`) is independent and optional; prices without allotment ≠ enforcement.
+| Source | How `MaaSModelRef` selects it | Role |
+| --- | --- | --- |
+| **Built-in** | `usageCapture.profile: openai-chat` | Product-owned defaults for common API shapes; versioned with MaaS / gateway |
+| **ConfigMap** | `usageCapture.profileRef` → ConfigMap name/key | Shared site-local or vendor-specific shapes without a CRD |
+| **Inline on ModelRef** | `usageCapture.billableUnits` (+ optional `costExpr`) | Per-model definition of the same profile object — no shared ConfigMap required |
 
-### Allotment
+**Built-in profiles (illustrative v1 set)**
 
-Optional `budgetPolicy` on the subscription, for example:
+| Profile | Applies to | Built-in behavior |
+| --- | --- | --- |
+| `openai-chat` | OpenAI Chat Completions–compatible backends | Raw `prompt` / `cached` / `output` / `reasoning` paths; profile **default `costExpr`** when cache-aware rates are used (prompt ⊇ cached) |
+| `openai-chat-basic` | Same chat `usage` shape without cache-aware pricing | `prompt` ← `prompt_tokens`, `output` ← `completion_tokens`; default cost is Σ count × rate |
+| `anthropic-messages` | Anthropic Messages API (used by MaaS / gateway internals for Messages-shaped traffic) | Raw `input` / `cache_read` / `cache_creation` / `output` paths; default cost is Σ count × rate (fields are already disjoint — see below) |
+| `anthropic-messages-basic` | Same Messages `usage` without cache-aware pricing | `input` ← `input_tokens`, `output` ← `output_tokens` |
+
+**ConfigMap-backed profiles** use the same schema as inline / built-in expansion under a documented key. The controller resolves `profile` or `profileRef` at reconcile time and publishes the expanded capture into the metering path. Prefer ConfigMap when several models share one custom shape; prefer inline when only one model needs a one-off.
+
+Day-1 UX remains a built-in profile name (`openai-chat` or `anthropic-messages`) with no extra objects. ConfigMap covers shared customs. Inline covers per-model override without a CRD.
+
+**`openai-chat` family.** Assumes a Chat Completions–compatible flat `usage` object with at least `prompt_tokens` and `completion_tokens` (and typically `total_tokens`). Optional detail fields such as `prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` are read when present and treated as **0** when absent. OpenAI-style `cached_tokens` is a **subset** of `prompt_tokens`, so cache-aware pricing uses the profile `defaultCostExpr` (not independent Σ on both).
+
+**`anthropic-messages` family.** Assumes Anthropic Messages `usage` with at least `input_tokens` and `output_tokens`. Optional `cache_read_input_tokens` and `cache_creation_input_tokens` are read when present and treated as **0** when absent. Unlike OpenAI, Anthropic’s `input_tokens` is already the **non-cached** slice (tokens after the last cache breakpoint); cache read/write counts are **additive**, not nested inside `input_tokens`. Total input ≈ `input_tokens + cache_read_input_tokens + cache_creation_input_tokens`. Independent rate weights (`Σ count × rate`) are therefore correct for cache-aware Anthropic pricing without a subtractive `costExpr`.
+
+Missing top-level `usage` when metering is enabled is treated as an incomplete settle, not a successful zero-cost request. Embeddings, audio, image, and other API shapes get their own built-in or ConfigMap profiles rather than reusing these chat/Messages profiles.
+
+#### Cost model
+
+By default, cost is independent rate weights over captured counts:
+
+`cost = Σ (unit_count × unit_rate)`
+
+Most deployments only set `pricing.perUnit`. Reported counts remain whatever capture read from `usage`.
+
+**Accounting unit is a label, not a currency engine.** `pricing.unit` (e.g. `USD`, `CREDITS`) names the dimension used for showback, budgets, and remaining-balance reporting. The product multiplies counts by rates in that unit; it does **not** convert between units or currencies (no FX, no CREDITS↔USD math). Operators pick one unit per subscription rate card and keep rates and limits in that same unit.
+
+When cost is not a simple product sum — for example OpenAI-style overlap where `cached_tokens` is a subset of `prompt_tokens` — the control layer uses an optional **`costExpr`** over unit names and rates. Profiles may ship a **`defaultCostExpr`** so operators still only configure rates for known shapes. An explicit `costExpr` on the ModelRef (or, rarely, the subscription) overrides the profile default.
+
+Capture keeps **raw** API counts so showback matches the wire format. Overlap is handled in pricing, not by inventing a reduced “input” counter. Example OpenAI-shaped default:
+
+`(prompt - cached) * rates.input + cached * rates.cached + output * rates.output`
+
+(with missing `cached` treated as 0).
+
+#### Reservation estimate (ModelRef default, subscription override)
+
+Before upstream responds, the gateway must **hold** an estimated cost against the subscription budget. How that estimate is built is model-shaped by default and entitlement-tunable:
+
+| Mode | Meaning | Typical use |
+| --- | --- | --- |
+| `max_tokens` | Bound the hold from a request field (e.g. `max_tokens` / Messages equivalent) | Chat / Messages models where clients can declare max output |
+| `static` | Hold a fixed amount (tokens or cost in the pricing unit — schema TBD) | Embeddings / APIs without `max_tokens`, or entitlements that prefer a fixed floor |
+
+**Defaults on `MaaSModelRef`** (alongside capture and pricing). **Optional override on `MaaSSubscription` `modelRefs[]`** for that entitlement — same pattern as price overrides. When `mode: max_tokens`, operators may **require** the path so missing `max_tokens` rejects the request instead of falling back.
+
+#### Sketch — rates only
+
+```yaml
+# Sketch — names subject to API review
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: llama-3
+  namespace: llm
+spec:
+  usageCapture:
+    profile: openai-chat-basic          # built-in name
+  pricing:
+    unit: CREDITS                       # opaque reporting unit (could equally be USD)
+    perUnit:
+      prompt: "1"
+      output: "20"
+  reservationEstimate:                 # default for this model
+    mode: max_tokens
+    require: true                       # reject if max_tokens (or configured path) absent
+```
+
+#### Sketch — OpenAI chat with cache-aware rates
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: llama-3
+  namespace: llm
+spec:
+  usageCapture:
+    profile: openai-chat                # built-in name
+  pricing:
+    unit: USD                           # same mechanics as CREDITS — label only, no FX
+    perUnit:
+      input: "0.0001"
+      cached: "0.0001"
+      output: "0.002"
+      reasoning: "0.003"
+```
+
+#### Sketch — ConfigMap-backed custom profile (shared)
+
+```yaml
+# Platform / operator managed — not a CRD
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-usage-capture-profiles
+  namespace: models-as-a-service          # illustrative
+data:
+  my-vendor-chat.yaml: |
+    billableUnits:
+      - name: prompt
+        path: usage.prompt_tokens
+      - name: output
+        path: usage.completion_tokens
+    # defaultCostExpr: ...
+---
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: vendor-model
+  namespace: llm
+spec:
+  usageCapture:
+    profileRef:
+      name: maas-usage-capture-profiles
+      key: my-vendor-chat.yaml           # illustrative; schema TBD
+  pricing:
+    unit: CREDITS
+    perUnit:
+      prompt: "1"
+      output: "20"
+```
+
+#### Sketch — inline profile on `MaaSModelRef` (per-model)
+
+Same object shape as the ConfigMap entry, defined only on this model:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: weird-vendor-model
+  namespace: llm
+spec:
+  usageCapture:
+    # no profile / profileRef — full capture defined here
+    billableUnits:
+      - name: prompt
+        path: usage.input_tokens
+      - name: output
+        path: usage.output_tokens
+    costExpr: >
+      prompt * rates.prompt + output * rates.output
+  pricing:
+    unit: CREDITS
+    perUnit:
+      prompt: "1"
+      output: "20"
+```
+
+Built-in expansion for `profile: openai-chat` (illustrative):
+
+```yaml
+billableUnits:
+  - name: prompt
+    path: usage.prompt_tokens
+  - name: cached
+    path: usage.prompt_tokens_details.cached_tokens
+  - name: output
+    path: usage.completion_tokens
+  - name: reasoning
+    path: usage.completion_tokens_details.reasoning_tokens
+defaultCostExpr: >
+  (prompt - cached) * rates.input
+  + cached * rates.cached
+  + output * rates.output
+  + reasoning * rates.reasoning
+```
+
+Built-in expansion for `profile: anthropic-messages` (illustrative):
+
+```yaml
+billableUnits:
+  - name: input
+    path: usage.input_tokens                         # already non-cached
+  - name: cache_read
+    path: usage.cache_read_input_tokens              # missing ⇒ 0
+  - name: cache_creation
+    path: usage.cache_creation_input_tokens          # missing ⇒ 0
+  - name: output
+    path: usage.output_tokens
+# No defaultCostExpr required — fields are disjoint; cost = Σ count × rate
+```
+
+#### Sketch — Anthropic Messages with cache-aware rates
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: claude-sonnet
+  namespace: llm
+spec:
+  usageCapture:
+    profile: anthropic-messages         # built-in; used for Messages-shaped internals
+  pricing:
+    unit: CREDITS
+    perUnit:
+      input: "1"
+      cache_read: "0.1"
+      cache_creation: "1.25"
+      output: "5"
+```
+
+#### Sketch — explicit `costExpr`
+
+```yaml
+pricing:
+  unit: USD
+  perUnit:
+    prompt: "0.0001"
+    cached: "0.00005"
+    output: "0.002"
+  costExpr: >
+    (prompt - cached) * rates.prompt
+    + cached * rates.cached
+    + output * rates.output
+```
+
+#### Sketch — ModelRef static estimate (e.g. embeddings)
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: text-embed
+  namespace: llm
+spec:
+  usageCapture:
+    profile: openai-embeddings        # illustrative built-in / ConfigMap
+  pricing:
+    unit: CREDITS
+    perUnit:
+      total: "1"
+  reservationEstimate:
+    mode: static
+    staticAmount: "50"                # hold size; unit semantics TBD (tokens vs cost)
+```
+
+#### Sketch — subscription rate override + budget (+ estimate override)
+
+Budgets **reserve** estimated cost at request time using the **effective** reservation estimate (ModelRef default, optionally overridden on the subscription modelRef), then **settle** to actual usage on the response. Missing required estimate inputs can **reject** the request. Calendar periods may set `startDay` (default **1**). Backend support for calendar/TZ is assumed desirable but not guaranteed in every release.
 
 ```yaml
 # Sketch — names subject to API review
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
 metadata:
-  name: example
+  name: premium-team
 spec:
   modelRefs:
     - name: llama-3
+      namespace: llm
       pricing:
-        unit: USD  # illustrative; must match the subscription accounting unit
-        amount: "0.002"
+        perUnit:
+          output: "0.0015"
+      # optional — omit to keep ModelRef reservationEstimate
+      reservationEstimate:
+        mode: static
+        staticAmount: "25"            # entitlement prefers a fixed hold over max_tokens
+    - name: text-embed
+      namespace: llm
+      # inherits ModelRef reservationEstimate (static)
   budgetPolicy:
-    limit: "200"            # allotment in same unit as pricing (here USD)
-    renewal:
-      mode: drain           # drain | rollover
-      period: 30d           # required when budgetPolicy present
-      # anchor: "2026-01-01T00:00:00Z"  # optional; UTC period anchor
-      # max_carry: "100"               # optional; rollover only
-    enforcement: hard       # hard | soft (required with budgetPolicy, or default hard)
-    # alerts:               # optional; backend-dependent
-    #   thresholds: [80, 100]
+    limit: "200"                    # same opaque unit as pricing (USD or CREDITS — no FX)
+    period:
+      # duration: 30d               # or calendar month (backend-dependent):
+      calendarMonth: true
+      timezone: America/New_York
+      startDay: 1                   # default 1 when omitted
+    alerts:
+      thresholds: [80]              # warn approaching limit; hard stop still at limit
 ```
 
-Shape intentionally tracks a Tokenomics-style budget (`limit`, nested `renewal`, `enforcement`, optional `alerts`) so reconcile is a mapping, not a redesign. MaaS may omit backend-only fields (`costs` references, named budget catalogs) until needed.
+#### Working rules (pricing)
 
-- **`enforcement`** is first-class (`hard` | `soft`); do not encode soft-only behavior as a separate `softLimit` money field.
-- Counters / admit path: **lazy seed** on first use (no eager per-user rows for every possible user).
-- Reconciliation publishes policy into the chosen enforcement backend; **publish path** details are an open implementation question (see below).
+- One accounting unit across a subscription’s priced models (e.g. `USD` or `CREDITS`); exact schema in API review. The unit is an opaque reporting label — no cross-unit or currency conversion in product.
+- Default cost is `Σ (unit_count × unit_rate)` unless a profile `defaultCostExpr` or explicit `costExpr` applies.
+- Subscription price overrides refer only to billable units defined by the model’s capture (profile and/or explicit units).
+- Prefer built-in `usageCapture.profile` for common shapes (`openai-chat`, `anthropic-messages`, and `*-basic` variants); `profileRef` (ConfigMap) when several models share a custom shape; inline `billableUnits` / `costExpr` on the ModelRef for per-model override.
+- When inline capture is present alongside `profile` / `profileRef`, inline **replaces** the referenced expansion for that model (v1).
+- No `UsageCaptureProfile` CRD — built-ins + ConfigMap + inline ModelRef are enough.
+- `reservationEstimate` defaults on the ModelRef; subscription `modelRefs[].reservationEstimate` overrides for that entitlement when set.
+- Prices without a budget enable observe-only showback; budget remains optional and independent.
 
-### Identity and period
+### Budget
 
-- Cap key: **`userId` + `subscriptionId`**.
-- Period: **fixed duration** (`period` required with policy). Calendar alignment parked.
-- Service accounts vs humans: same keying rules (no special SA unlimited path in v1).
+Budgets live on **`MaaSSubscription`** and consume **calculated cost** from the effective rate card (not raw token totals alone). Reservation estimate **defaults** on the ModelRef and may be **overridden** on the subscription modelRef. Enforcement and counters run in the gateway / metering backend; MaaS declares policy and reconciles it. See the sketches above for `reservationEstimate` and `budgetPolicy` shapes.
 
-### Failure and teardown (direction)
+#### Must-have (v1)
 
-- Store / accounting unavailability: **backend-defined**. Current Tokenomics draft leans **fail-closed for new admission** when accounting is untrustworthy (e.g. pre-dispatch `503`), including soft policies — confirm against the revision we ship against.
-- Disable allotment / remove policy: teardown counters per backend-compatible disable path (no orphan counters).
+| Capability | Control-layer shape (illustrative) | Notes |
+| --- | --- | --- |
+| Spend **limit** | `budgetPolicy.limit` | Same opaque accounting unit as pricing (e.g. `USD` or `CREDITS`) — no FX between units |
+| **Period** | `budgetPolicy.period` | Fixed duration and/or calendar month + timezone + `startDay` (default **1**); calendar/TZ **backend-dependent** |
+| **Hard stop** at limit | Implied when `budgetPolicy` is set | Deny when limit would be exceeded (including failed reservation) |
+| **Alert thresholds** | `budgetPolicy.alerts.thresholds` | Percent of limit (e.g. 80); warn while approaching the hard stop |
+| **Reserve / settle** | ModelRef / subscription `reservationEstimate` + gateway | Hold estimate before upstream (`mode: max_tokens` or `static`); settle/release on response; optional **require** when mode needs a request field |
+| Enforcement **key** | Principal + subscription | `userId` + `subscriptionId` (service accounts treated as human-equivalent) |
+| **Remaining budget API** | Product / backend HTTP API | Real-time remaining/spend for the current window for portal and clients — not Loki-only |
+
+#### Remaining usage / budget API
+
+Showback in Loki (or similar) is not enough. Product needs an endpoint that returns limit, spend-to-date, **remaining**, period bounds (or reset-at), and alert state for an authenticated principal + subscription, from a path consistent with gateway counters. Exact route/auth are API review; the store stays with the metering backend.
+
+#### Working rules (budget)
+
+- Budget optional; when set, needs a resolvable rate card for models that consume the allotment (completeness rules — open).
+- `limit` matches `pricing.unit`; no currency or unit conversion.
+- Reserve at request, settle on response using the effective `reservationEstimate` (ModelRef default, subscription override when present).
+- Reject when `mode: max_tokens` with `require: true` (or equivalent) and the bound field is missing.
+- Remaining-budget reads are a product requirement on the enforcement backend.
+
+### Backend dependency (direction only)
+
+| Layer | Owns |
+| --- | --- |
+| **MaaS control layer (this proposal)** | Declarative capture + pricing + default `reservationEstimate` on `MaaSModelRef`; price / estimate overrides + `budgetPolicy` on `MaaSSubscription`; reconcile into the metering / enforcement backend; portal consumption of remaining API |
+| **Enforcement / metering backend** | Admit/reserve/settle against priced usage, durable counters, period reset, alert hooks, **remaining-budget read API** |
+
+Prefer adapting reconcile mapping to whatever backend ships over inventing a second ledger in MaaS.
 
 ## Consequences
 
 **Positive**
 
-- Clear product story: rate card vs period cap vs (later) wallet.
-- Aligns with enterprise FinOps expectations (allotment + renewal).
-- Keeps MaaS declarative; avoids inventing a second ledger in the control plane.
-- Stays mappable to a Tokenomics-style contract without hard-coding a store product in the CRD.
+- Common case is rates-only: `cost = Σ count × rate` with no expression to maintain.
+- Reported token counts can match the API; overlap lives in optional / profile `costExpr`.
+- Profiles keep OpenAI-with-cache correct without forcing every user to write a formula.
+- Capture paths stay with the model; subscription adjusts commercial rates and may override reservation estimate.
+- Budget consumes the same effective cost; reserve/settle matches common gateway spend-control practice (`max_tokens` or static, model default + entitlement override).
+- Remaining-budget API keeps portal aligned with gateway enforcement.
 
 **Negative / risks**
 
-- Operators who want prepaid wallet UX must wait or BYO.
-- Fixed-duration periods may surprise users expecting calendar months.
-- Portal “remaining” UX depends on backend APIs (not MaaS DB).
-- All-or-nothing pricing can block partial rate cards until complete.
-- **Coupling risk:** if #32 (or its successor) changes renewal, tenant model, or failure semantics, MaaS reconcile and docs must track — this control-layer proposal should not over-promise those behaviors.
+- Operators must maintain capture paths when providers change `usage` shapes.
+- Pricing both overlapping units with **only** independent rates (no profile `defaultCostExpr` / `costExpr`) silently over-bills — needs docs + validation.
+- Calendar month / TZ periods may lag if the backend only supports fixed duration initially.
+- Remaining API consistency vs hot-path counters needs an explicit SLA (how stale is acceptable).
+- Existing `billingRate.perToken` on subscription modelRefs overlaps this surface — reconcile or deprecate in API review.
 
 ## Open Questions
 
-Many items below are **backend-dependent**. Working assumption: enforcement backend ≈ [Tokenomics PR #32](https://github.com/praxis-proxy/enhancements/pull/32), which **can and probably will change** before implementation freeze. Resolve jointly with Praxis/Tokenomics owners; do not treat answers below as MaaS-only product calls.
+### Pricing
 
-### A. Backend contract (assumed Tokenomics-shaped)
+| # | Topic | Notes |
+| --- | --- | --- |
+| P1 | **Path language** | Dotted path vs JSONPath; arrays / streaming usage |
+| P2 | **Missing path on response** | Zero vs incomplete settle vs reject |
+| P3 | **Override merge** | Partial per-unit override (sketch) vs replace entire card |
+| P4 | **Simple total-token mode** | First-class alongside typed rates, or just one capture entry named `total` |
+| P5 | **Unit / scale** | Per-token vs per-1K rates; allowed unit strings (`USD`, `CREDITS`, …); one unit per subscription; confirm no FX / cross-unit conversion |
+| P6 | **Relation to `billingRate.perToken`** | Reuse, replace, or deprecate the existing subscription field |
+| P7 | **Completeness before observe cost / budget** | Must every model on the subscription be priced before budget is valid? |
+| P8 | **When to require / warn on `costExpr`** | If `prompt` and `cached` both have rates and no profile default / `costExpr`, warn or reject? |
+| P9 | **Profile catalog** | ConfigMap namespace / RBAC / schema validation? Infer `openai-chat` vs `anthropic-messages` from model/provider type vs require explicit? |
+| P9b | **Inline vs profile** | v1 = inline replaces referenced profile; later partial overlay? |
+| P10 | **Strict vs lenient missing details** | Missing `usage` ⇒ incomplete; missing `cached_tokens` ⇒ 0? |
+| P11 | **`costExpr` language** | Minimal ops for v1; who may set it (ModelRef only vs subscription override)? |
 
-| # | Topic | Why open | Dependency | Notes / current #32 lean (may change) |
-| --- | --- | --- | --- | --- |
-| A1 | **Which backend revision we ship against** | #32 is explicitly not the last iteration | Backend | Track proposal + follow-on PRs; pin MaaS reconcile to a named contract version when possible |
-| A2 | **MaaS as “budget manager” vs thinner publisher** | Tokenomics splits Praxis (enforce) vs budget manager (policies, durable history, managed store) | Backend + MaaS | Does MaaS own managed-store ops, only publish YAML/policy revisions, or call a separate manager? |
-| A3 | **Tenant / identity mapping** | Tokenomics tenants, header selection, parent/child allocations | Backend + MaaS | How does `userId` + `subscriptionId` map to tenant + budget selection? Reserved vs shared child allocations needed in v1? |
-| A4 | **Publish / reconcile path** | Controller must push subscription policy into the backend | Backend + MaaS | ConfigMap/YAML? API? CR watch? Idempotent revisions? Migration when budgets reassign? |
-| A5 | **Period, anchor, timezone** | Fixed duration first; calendar parked | Backend | #32: fixed duration + UTC anchor; calendar-month out of first iteration (`30d` ≠ calendar month). Unpark calendar only when backend supports it |
-| A6 | **Renewal details** | drain \| rollover locked at product level; edge cases are backend | Backend | #32: no default; optional `max_carry` on rollover; debt/holds across boundaries. Does MaaS surface `max_carry` / anchor in CRD v1? |
-| A7 | **Hard vs soft semantics** | Soft = over-quota signal / continue, not a second product | Backend | Map `budgetPolicy.enforcement` to backend hard/soft. Soft still reserves/settles and does **not** bypass store failures. Optional `alerts` vs soft enforcement — keep distinct |
-| A8 | **Fail-open vs fail-closed** | Must be explicit before GA | Backend | #32 matrix: untrustworthy accounting → block new admission (`503`), preserve in-flight responses after dispatch. Confirm product wording (not classic “fail-open”) |
-| A9 | **Remaining / reporting limit (current quota)** | Portal and operators need “how much left?” | Backend | Reporting a tenant’s current quota/remaining should be an explicit backend capability. MaaS portal reads backend; no MaaS remaining DB |
-| A10 | **Observe-only / reporting without budgets** | Prices without allotment | Backend | #32: reporting without budget engine is an explicit pipeline choice. Map MaaS “all models priced ⇒ observe” onto that path |
-| A11 | **Cost / unit schema** | Money vs weighted tokens vs raw tokens | Backend + MaaS | #32: one accounting method/unit per tenant hierarchy; invalid costs fail even under soft. Align `modelRef.pricing` units with backend cost matching |
-| A12 | **Disable / teardown** | Remove `budgetPolicy` without orphan state | Backend | Compatible disable path; confirm revision/migration rules when policy deleted |
-| A13 | **Store topology (internal K/V vs HA)** | Ops concern, not CRD shape | Backend | Opaque to MaaS CRD; affects HA story and whether MaaS must run a manager |
+### Budget
 
-### B. MaaS control-plane / product
-
-| # | Topic | Why open | Notes |
-| --- | --- | --- | --- |
-| B1 | **Exact CRD field names** | Sketch only (`limit`, nested `renewal`, `enforcement`, optional `alerts`) | API review; prefer names that map cleanly to backend (`limit`/`renewal.mode`/`enforcement`) without leaking store internals |
-| B2 | **All-or-nothing pricing UX** | Reject unpriced model add vs require completing card | Validation rules and status messages on `MaaSSubscription` |
-| B3 | **Docs-default period (30d)** | Required field; docs example vs silent default | Keep required; document 30d as recommendation |
-| B4 | **Portal UX timing** | Show remaining in v1 portal vs later | Depends on A9 existing; product priority only |
-| B5 | **Raise one user’s cap** | Parked; not v1 | Would need backend override primitives (A3) if ever unparked |
-| B6 | **Per-user / per-key overrides** | Beyond subscription policy | Not v1; hierarchical Tokenomics child allocations may cover some cases later |
-| B7 | **Wallet mode** | Deferred product | Do not block this allotment proposal; design later if needed |
-| B8 | **Cross-subscription pools** | BYO in v1 | Document escape hatch; no first-class CR |
-| B9 | **Soft-limit notification channel** | Alert vs header-only vs both | Mostly A7; MaaS may only document operator expectations |
-| B10 | **HTTP status product story** | 429 vs 402 vs 503 toward end users | Backend emits; MaaS docs must not invent a different code |
-
-### C. Sequencing
-
-1. Review current [#32](https://github.com/praxis-proxy/enhancements/pull/32) with Praxis owners; note which sections are still expected to move.
-2. For each **A\*** row, record: *owned by backend* / *owned by MaaS* / *joint*, and the proposal revision referenced.
-3. Freeze MaaS CRD sketch only after A3–A7 and A11 have a stable mapping story.
-4. File implementation tickets after that freeze — not before.
+| # | Topic | Notes |
+| --- | --- | --- |
+| B1 | **Period forms** | Exact CRD for `duration` vs `calendarMonth` + `timezone` + `startDay` (default 1); what to reject when backend lacks calendar support |
+| B2 | **Alert delivery** | Header-only vs webhook/email vs both; who owns notification sinks |
+| B3 | **Remaining API shape** | Path(s), auth, dimensions (principal, subscription, model?), freshness SLA vs admit counters |
+| B4 | **Rollover / drain** | Needed in v1 or fixed reset-to-zero only? |
+| B5 | **Reservation estimate** | How `max_tokens` / `staticAmount` map into rate-card hold (tokens vs cost); prompt-side estimate without usage; TTL on abandoned holds; default `mode` per built-in profile |
+| B6 | **Required request fields** | Path for `mode: max_tokens` (OpenAI vs Anthropic); default `require: true` for chat profiles?; interaction with streaming |
+| B7 | **Estimate override merge** | Subscription `reservationEstimate` always replaces ModelRef (v1 sketch) vs partial field merge |
