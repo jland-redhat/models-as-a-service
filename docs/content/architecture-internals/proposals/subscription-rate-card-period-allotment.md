@@ -112,9 +112,7 @@ By default, cost is independent rate weights over captured counts:
 
 `cost = Σ (unit_count × unit_rate)`
 
-Most deployments only set `pricing.perUnit`. Reported counts remain whatever capture read from `usage`.
-
-**Accounting unit is a label, not a currency engine.** `pricing.unit` (e.g. `USD`, `CREDITS`) names the dimension used for showback, budgets, and remaining-balance reporting. The product multiplies counts by rates in that unit; it does **not** convert between units or currencies (no FX, no CREDITS↔USD math). Operators pick one unit per subscription rate card and keep rates and limits in that same unit.
+Most deployments only set `pricing.perUnit`. Reported counts remain whatever capture read from `usage`. Rates and budget limits are dimensionless weights in the same numeric space — the control layer does not name or convert currencies.
 
 When cost is not a simple product sum — for example OpenAI-style overlap where `cached_tokens` is a subset of `prompt_tokens` — the control layer uses an optional **`costExpr`** over unit names and rates. Profiles may ship a **`defaultCostExpr`** so operators still only configure rates for known shapes. An explicit `costExpr` on the ModelRef (or, rarely, the subscription) overrides the profile default.
 
@@ -131,7 +129,7 @@ Before upstream responds, the gateway must **hold** an estimated cost against th
 | Mode | Meaning | Typical use |
 | --- | --- | --- |
 | `max_tokens` | Bound the hold from a request field (e.g. `max_tokens` / Messages equivalent) | Chat / Messages models where clients can declare max output |
-| `static` | Hold a fixed amount (tokens or cost in the pricing unit — schema TBD) | Embeddings / APIs without `max_tokens`, or entitlements that prefer a fixed floor |
+| `static` | Hold a fixed amount (tokens or cost — schema TBD) | Embeddings / APIs without `max_tokens`, or entitlements that prefer a fixed floor |
 
 **Defaults on `MaaSModelRef`** (alongside capture and pricing). **Optional override on `MaaSSubscription` `modelRefs[]`** for that entitlement — same pattern as price overrides. When `mode: max_tokens`, operators may **require** the path so missing `max_tokens` rejects the request instead of falling back.
 
@@ -148,7 +146,6 @@ spec:
   usageCapture:
     profile: openai-chat-basic          # built-in name
   pricing:
-    unit: CREDITS                       # opaque reporting unit (could equally be USD)
     perUnit:
       prompt: "1"
       output: "20"
@@ -169,7 +166,6 @@ spec:
   usageCapture:
     profile: openai-chat                # built-in name
   pricing:
-    unit: USD                           # same mechanics as CREDITS — label only, no FX
     perUnit:
       input: "0.0001"
       cached: "0.0001"
@@ -206,7 +202,6 @@ spec:
       name: maas-usage-capture-profiles
       key: my-vendor-chat.yaml           # illustrative; schema TBD
   pricing:
-    unit: CREDITS
     perUnit:
       prompt: "1"
       output: "20"
@@ -233,7 +228,6 @@ spec:
     costExpr: >
       prompt * rates.prompt + output * rates.output
   pricing:
-    unit: CREDITS
     perUnit:
       prompt: "1"
       output: "20"
@@ -285,7 +279,6 @@ spec:
   usageCapture:
     profile: anthropic-messages         # built-in; used for Messages-shaped internals
   pricing:
-    unit: CREDITS
     perUnit:
       input: "1"
       cache_read: "0.1"
@@ -297,7 +290,6 @@ spec:
 
 ```yaml
 pricing:
-  unit: USD
   perUnit:
     prompt: "0.0001"
     cached: "0.00005"
@@ -320,12 +312,11 @@ spec:
   usageCapture:
     profile: openai-embeddings        # illustrative built-in / ConfigMap
   pricing:
-    unit: CREDITS
     perUnit:
       total: "1"
   reservationEstimate:
     mode: static
-    staticAmount: "50"                # hold size; unit semantics TBD (tokens vs cost)
+    staticAmount: "50"                # hold size; semantics TBD (tokens vs cost)
 ```
 
 #### Sketch — subscription rate override + budget (+ estimate override)
@@ -353,7 +344,7 @@ spec:
       namespace: llm
       # inherits ModelRef reservationEstimate (static)
   budgetPolicy:
-    limit: "200"                    # same opaque unit as pricing (USD or CREDITS — no FX)
+    limit: "200"                    # same numeric space as pricing rates
     period:
       # duration: 30d               # or calendar month (backend-dependent):
       calendarMonth: true
@@ -365,7 +356,6 @@ spec:
 
 #### Working rules (pricing)
 
-- One accounting unit across a subscription’s priced models (e.g. `USD` or `CREDITS`); exact schema in API review. The unit is an opaque reporting label — no cross-unit or currency conversion in product.
 - Default cost is `Σ (unit_count × unit_rate)` unless a profile `defaultCostExpr` or explicit `costExpr` applies.
 - Subscription price overrides refer only to billable units defined by the model’s capture (profile and/or explicit units).
 - Prefer built-in `usageCapture.profile` for common shapes (`openai-chat`, `anthropic-messages`, and `*-basic` variants); `profileRef` (ConfigMap) when several models share a custom shape; inline `billableUnits` / `costExpr` on the ModelRef for per-model override.
@@ -382,7 +372,7 @@ Budgets live on **`MaaSSubscription`** and consume **calculated cost** from the 
 
 | Capability | Control-layer shape (illustrative) | Notes |
 | --- | --- | --- |
-| Spend **limit** | `budgetPolicy.limit` | Same opaque accounting unit as pricing (e.g. `USD` or `CREDITS`) — no FX between units |
+| Spend **limit** | `budgetPolicy.limit` | Same numeric space as pricing rates (dimensionless weights) |
 | **Period** | `budgetPolicy.period` | Fixed duration and/or calendar month + timezone + `startDay` (default **1**); calendar/TZ **backend-dependent** |
 | **Hard stop** at limit | Implied when `budgetPolicy` is set | Deny when limit would be exceeded (including failed reservation) |
 | **Alert thresholds** | `budgetPolicy.alerts.thresholds` | Percent of limit (e.g. 80); warn while approaching the hard stop |
@@ -397,7 +387,7 @@ Showback in Loki (or similar) is not enough. Product needs an endpoint that retu
 #### Working rules (budget)
 
 - Budget optional; when set, needs a resolvable rate card for models that consume the allotment (completeness rules — open).
-- `limit` matches `pricing.unit`; no currency or unit conversion.
+- `limit` is in the same numeric space as `pricing.perUnit` rates.
 - Reserve at request, settle on response using the effective `reservationEstimate` (ModelRef default, subscription override when present).
 - Reject when `mode: max_tokens` with `require: true` (or equivalent) and the bound field is missing.
 - Remaining-budget reads are a product requirement on the enforcement backend.
@@ -440,7 +430,7 @@ Prefer adapting reconcile mapping to whatever backend ships over inventing a sec
 | P2 | **Missing path on response** | Zero vs incomplete settle vs reject |
 | P3 | **Override merge** | Partial per-unit override (sketch) vs replace entire card |
 | P4 | **Simple total-token mode** | First-class alongside typed rates, or just one capture entry named `total` |
-| P5 | **Unit / scale** | Per-token vs per-1K rates; allowed unit strings (`USD`, `CREDITS`, …); one unit per subscription; confirm no FX / cross-unit conversion |
+| P5 | **Rate scale** | Per-token vs per-1K rates; how portals display cost without a named currency field |
 | P6 | **Relation to `billingRate.perToken`** | Reuse, replace, or deprecate the existing subscription field |
 | P7 | **Completeness before observe cost / budget** | Must every model on the subscription be priced before budget is valid? |
 | P8 | **When to require / warn on `costExpr`** | If `prompt` and `cached` both have rates and no profile default / `costExpr`, warn or reject? |
