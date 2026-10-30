@@ -11,15 +11,13 @@ description: Proposed MaaS control layer for multi-type usage capture and option
 > This document describes a planned control-layer contract. It is not documentation of an implemented feature.
 > Field names in the YAML sketches are illustrative and subject to API review.
 >
-> **2026-10-30 posture:** MaaS declares **what to capture** and optional **weights** (relative to a **stable unit**). It does **not** declare budgets, wallets, or period allotments. **Cost of record** and **go / no-go** for spend cut-off live in an **external metering system** that consumes exported usage and **pushes** entitlement state into the gateway.
+> MaaS declares **what to capture** and optional **weights** (relative to a **stable unit**). **Cost of record** and **go / no-go** for spend cut-off live in an **external metering system** that consumes exported usage and **pushes** entitlement state into the gateway. Spend caps, wallets, and period allotments are **not** MaaS CRD fields.
 
 **Author:** James Land
 
-**Date:** 2026-10-22 (weights revision 2026-10-30; supersedes rate-card + period-allotment sketch)
+**Date:** 2026-10-22 (weights revision 2026-10-30)
 
 **Scope:** Models-as-a-Service control plane (`MaaSModelRef`, `MaaSSubscription`); gateway emit / optional weighted QoS; external metering integration (Price Tag, Monetize 360, Cost Management / BYO)
-
-**Supersedes:** earlier drafts titled “subscription rate card and period allotment” in this PR (budget / `pricing` language removed from the CRD surface).
 
 ## What
 
@@ -34,7 +32,6 @@ Those declarations are reconciled into the gateway emit path (and later into any
 
 - **Capture and default weights** live on **`MaaSModelRef`**.
 - **`MaaSSubscription` may override weights** per entitlement; subscriptions do **not** redefine capture.
-- **No `budgetPolicy` / wallet / period allotment** on MaaS CRs.
 - **External metering** calculates cost and pushes **go / no-go**; admit uses local mirrored state only (no per-request outbound).
 - Some **lag** between true cost and cut-off is inherent; the **meter owns leeway** (e.g. Monetize 360 ~$10 wallet floor). We optimize for the **fastest practical push** into the gateway.
 
@@ -44,26 +41,23 @@ Operators need:
 
 - **Accurate multi-type usage** — input / output / cache / reasoning (and non-token modes) as first-class emit, matching peer products and FinOps expectations.
 - A way to express **relative importance** of those units (**weights** against a **stable unit**) without pretending MaaS is the invoice system.
-- A clean seam so **Price Tag**, **Monetize 360**, and (if committed) **Red Hat Cost Management** can rate usage and revoke entitlement without divergent CRD budgets.
-
-Putting the same cost and budget data into RHOAI that already lives in the meter creates dual ledgers, drift, and operator confusion (see PR review discussion). Capture + optional weights avoid that while still enabling observability and future weighted rate limiting.
+- A clean seam so **Price Tag**, **Monetize 360**, and (if committed) **Red Hat Cost Management** can rate usage and revoke entitlement without duplicating their ledger in RHOAI.
 
 ## Goals
 
 - Declarative **usage capture** on `MaaSModelRef` (built-in / ConfigMap / inline).
 - Optional **weights** on ModelRef + subscription override — same numeric space as a **stable unit** (docs term; not a CRD currency field).
 - Flexible token-type (and related) emit for external meters — **3.7 highest priority**.
-- Clear non-goal: **no CRD budget**; external meter owns cost + go/no-go.
+- External meter owns cost + go/no-go; MaaS does not declare spend caps on CRs.
 - Keep metering capture separate from QoS `tokenRateLimits` (weights may feed weighted QoS later without merging the policy surfaces).
 
 ## Non-Goals (for now)
 
-- **Budget / wallet / period allotment** fields on MaaS CRs (`budgetPolicy`, drain/rollover, CRD remaining-balance SoT).
+- Spend caps, wallets, or period allotments as MaaS CR fields.
 - Becoming **cost-of-record** or shipping invoices / AR.
 - Per-request outbound calls to external meters.
 - Prepaid wallet product UX in MaaS.
 - Hierarchical org → team → key pools as first-class CRs (BYO / later).
-- Local reserve-then-settle against a CRD spend cap (superseded by external push).
 
 ## Definitions
 
@@ -144,11 +138,11 @@ Gateway emit (raw units ± weights)
 
 - **3.7 Must:** accurate export so the meter can bind.
 - **Talk-back:** push as fast as practical; lag accepted; **leeway owned by the meter**.
-- **No CRD mirror of wallet balance** as source of truth.
+- Gateway may mirror go/no-go state only — not a second wallet ledger.
 
 ### Sketches
 
-#### Capture + weights only
+#### Capture + weights
 
 ```yaml
 # Sketch — names subject to API review
@@ -307,7 +301,7 @@ weights:
     + output * weights.output
 ```
 
-#### Subscription weight override (no budget)
+#### Subscription weight override
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
@@ -324,7 +318,6 @@ spec:
     - name: text-embed
       namespace: llm
       # inherits ModelRef weights (if any)
-  # intentionally no budgetPolicy / wallet / period allotment
 ```
 
 ### Working rules
@@ -335,7 +328,6 @@ spec:
 - Prefer built-in `usageCapture.profile` for common shapes; `profileRef` for shared customs; inline for one-offs.
 - When inline capture is present alongside `profile` / `profileRef`, inline **replaces** the referenced expansion for that model (v1).
 - No `UsageCaptureProfile` CRD — built-ins + ConfigMap + inline ModelRef are enough.
-- No `budgetPolicy` on `MaaSSubscription`.
 
 ### Backend dependency (direction only)
 
@@ -366,7 +358,7 @@ spec:
 
 | # | Topic | Notes |
 | --- | --- | --- |
-| W1 | **Field naming** | `weights` vs reuse/replace `billingRate.perToken`; relation to older `pricing` sketches |
+| W1 | **Field naming** | `weights` vs reuse/replace `billingRate.perToken` |
 | W2 | **Path language** | Dotted path vs JSONPath; arrays / streaming usage |
 | W3 | **Missing path on response** | Zero vs incomplete emit |
 | W4 | **Override merge** | Partial per-unit override vs replace entire weight map |
@@ -376,6 +368,6 @@ spec:
 | W8 | **Profile catalog** | ConfigMap namespace / RBAC / schema; infer profile vs require explicit |
 | W9 | **`weightExpr` language** | Minimal ops for v1; ModelRef only vs subscription override |
 | E1 | **Push talk-back contract** | Payload, correlation IDs, freshness, fail-open vs fail-closed |
-| E2 | **Push latency budget** | Meter decision → local admit state |
+| E2 | **Push latency** | Meter decision → local admit state |
 | E3 | **Deny code** | Distinct from QoS 429 when go/no-go is deny |
 | E4 | **Integration commitments** | Price Tag + Monetize 360; Cost Management yes/no |
