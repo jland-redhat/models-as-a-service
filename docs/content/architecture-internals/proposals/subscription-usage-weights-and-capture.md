@@ -11,7 +11,7 @@ description: Proposed MaaS control layer for multi-type usage capture and option
 > This document describes a planned control-layer contract. It is not documentation of an implemented feature.
 > Field names in the YAML sketches are illustrative and subject to API review.
 >
-> **2026-10-30 posture:** MaaS declares **what to capture** and optional **weights** (relative to a **stable unit**). It does **not** declare budgets, wallets, or period allotments. **Cost of record** and **go / no-go** for spend cut-off live in an **external metering system** that consumes exported usage and **pushes** entitlement state into the gateway. See the TP one-pager: [UsageMetering3.7.md](UsageMetering3.7.md).
+> **2026-10-30 posture:** MaaS declares **what to capture** and optional **weights** (relative to a **stable unit**). It does **not** declare budgets, wallets, or period allotments. **Cost of record** and **go / no-go** for spend cut-off live in an **external metering system** that consumes exported usage and **pushes** entitlement state into the gateway.
 
 **Author:** James Land
 
@@ -73,8 +73,6 @@ Putting the same cost and budget data into RHOAI that already lives in the meter
 | **Weight** | Per–billable-unit multiplier relative to the stable unit. Observability (+ optional rate-limit math). **Not** invoice price. |
 | **Billable unit** | Named usage dimension from capture (e.g. `prompt`, `output`, `cached`). |
 | **Go / no-go** | Entitlement flag pushed by the external meter into local gateway state. |
-
-Full TP definitions: [UsageMetering3.7.md](UsageMetering3.7.md#definitions).
 
 ## Proposed Design
 

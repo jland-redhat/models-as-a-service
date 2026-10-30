@@ -12,7 +12,7 @@ description: Pointer — control-layer proposal renamed; budget/pricing-on-CRD p
 >
 > **[Usage capture and rate weights (control layer)](subscription-usage-weights-and-capture.md)**
 >
-> Direction change (see also [UsageMetering3.7.md](UsageMetering3.7.md)):
+> Direction change:
 >
 > - **No** budget / period allotment / wallet on MaaS CRs
 > - **`pricing` → `weights`** (stable-unit relative; not invoice price)
