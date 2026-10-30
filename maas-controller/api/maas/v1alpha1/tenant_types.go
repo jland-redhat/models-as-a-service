@@ -284,11 +284,13 @@ type TenantPayloadProcessingConfig struct {
 	// ceiling, not Envoy's HTTP buffer filter. When set under
 	// MaasTenantConfig.spec.payloadProcessing, the AI Gateway controller always
 	// renders server.max_body_bytes and never allow_unbounded_body. Omission
-	// defaults to 10485760 (10 MiB). Under payloadPreProcessing the field is
-	// currently unused by the AI Gateway controller.
+	// defaults to 10485760 (10 MiB); values above 104857600 (100 MiB) are rejected.
+	// Under payloadPreProcessing the field is currently unused by the AI Gateway
+	// controller. Keep the Maximum in sync with AGC MaxExtProcMaxBodyBytes.
 	// +kubebuilder:default=10485760
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=104857600
 	MaxBodyBytes *int64 `json:"maxBodyBytes,omitempty"`
 }
 
