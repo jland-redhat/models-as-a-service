@@ -23,7 +23,7 @@ description: Proposed MaaS control layer for multi-type usage capture and option
 
 This document defines the **control layer** customers use to declare:
 
-1. **Usage capture** — which billable units to read from inference `usage`, via profiles.
+1. **Usage capture** — which usage units to read from inference `usage`, via profiles.
 2. **Optional weights** — per-unit multipliers relative to a **stable unit**, for observability and (optionally) weighted rate-limit math.
 
 Those declarations are reconciled into the gateway emit path (and later into any weighted QoS consumer). They are **not** a billing ledger.
@@ -64,8 +64,8 @@ Operators need:
 | Term | Meaning |
 | --- | --- |
 | **Stable unit** | Dimensionless baseline weights are expressed against. Operators choose what “1” means; the platform does not require a currency. **Documentation term — not a CRD field.** |
-| **Weight** | Per–billable-unit multiplier relative to the stable unit. Observability (+ optional rate-limit math). **Not** invoice price. |
-| **Billable unit** | Named usage dimension from capture (e.g. `prompt`, `output`, `cached`). |
+| **Weight** | Per–usage-unit multiplier relative to the stable unit. Observability (+ optional rate-limit math). **Not** invoice price. |
+| **Usage unit** | Named usage dimension from capture (e.g. `prompt`, `output`, `cached`). |
 | **Go / no-go** | Entitlement flag pushed by the external meter into local gateway state. |
 
 ## Proposed Design
@@ -75,20 +75,20 @@ Operators need:
 | Concern | Object | Role |
 | --- | --- | --- |
 | Usage shape / capture profile | `MaaSModelRef` | Built-in, ConfigMap, or inline |
-| Default weight per billable unit | `MaaSModelRef` | Optional catalog defaults |
+| Default weight per usage unit | `MaaSModelRef` | Optional catalog defaults |
 | Effective weight for an entitlement | `MaaSSubscription` | Optional override of ModelRef defaults |
 | Cost, wallet, period cap, go/no-go | **External meter** | Export CE in; push entitlement state out |
 | QoS rate limits | Existing `tokenRateLimits` (etc.) | Separate from metering; may later consume weights |
 
 ### Usage capture profiles
 
-`MaaSModelRef` gets its capture definition from one of three places. The expanded form is always the same shape: `billableUnits` plus optional `defaultWeightExpr` / `weightExpr`. A new CRD is intentionally **not** proposed — reuse built-ins, a ConfigMap, or define the profile object **inline on the ModelRef**.
+`MaaSModelRef` gets its capture definition from one of three places. The expanded form is always the same shape: `usageUnits` plus optional `defaultWeightExpr` / `weightExpr`. A new CRD is intentionally **not** proposed — reuse built-ins, a ConfigMap, or define the profile object **inline on the ModelRef**.
 
 | Source | How `MaaSModelRef` selects it | Role |
 | --- | --- | --- |
 | **Built-in** | `usageCapture.profile: openai-chat` | Product-owned defaults for common API shapes |
 | **ConfigMap** | `usageCapture.profileRef` → ConfigMap name/key | Shared site-local or vendor-specific shapes |
-| **Inline on ModelRef** | `usageCapture.billableUnits` (+ optional `weightExpr`) | Per-model definition without a shared ConfigMap |
+| **Inline on ModelRef** | `usageCapture.usageUnits` (+ optional `weightExpr`) | Per-model definition without a shared ConfigMap |
 
 **Built-in profiles (illustrative v1 set)**
 
@@ -189,7 +189,7 @@ metadata:
   namespace: models-as-a-service          # illustrative
 data:
   my-vendor-chat.yaml: |
-    billableUnits:
+    usageUnits:
       - name: prompt
         path: usage.prompt_tokens
       - name: output
@@ -221,7 +221,7 @@ metadata:
   namespace: llm
 spec:
   usageCapture:
-    billableUnits:
+    usageUnits:
       - name: prompt
         path: usage.input_tokens
       - name: output
@@ -237,7 +237,7 @@ spec:
 Built-in expansion for `profile: openai-chat` (illustrative):
 
 ```yaml
-billableUnits:
+usageUnits:
   - name: prompt
     path: usage.prompt_tokens
   - name: cached
@@ -256,7 +256,7 @@ defaultWeightExpr: >
 Built-in expansion for `profile: anthropic-messages` (illustrative):
 
 ```yaml
-billableUnits:
+usageUnits:
   - name: input
     path: usage.input_tokens
   - name: cache_read
@@ -322,9 +322,9 @@ spec:
 
 ### Working rules
 
-- Raw billable-unit counts are always emitted when present; weights are optional enrichment.
+- Raw usage-unit counts are always emitted when present; weights are optional enrichment.
 - Default weighted usage is `Σ (unit_count × unit_weight)` unless a profile `defaultWeightExpr` or explicit `weightExpr` applies.
-- Subscription weight overrides refer only to billable units defined by the model’s capture.
+- Subscription weight overrides refer only to usage units defined by the model’s capture.
 - Prefer built-in `usageCapture.profile` for common shapes; `profileRef` for shared customs; inline for one-offs.
 - When inline capture is present alongside `profile` / `profileRef`, inline **replaces** the referenced expansion for that model (v1).
 - No `UsageCaptureProfile` CRD — built-ins + ConfigMap + inline ModelRef are enough.
