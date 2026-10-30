@@ -33,7 +33,7 @@ Those declarations are reconciled into the gateway emit path (and later into any
 - **Capture and default weights** live on **`MaaSModelRef`**.
 - **`MaaSSubscription` may override weights** per entitlement; subscriptions do **not** redefine capture.
 - **External metering** calculates cost and pushes **go / no-go**; admit uses local mirrored state only (no per-request outbound).
-- Some **lag** between true cost and cut-off is inherent; the **meter owns leeway** (e.g. Monetize 360 ~$10 wallet floor). We optimize for the **fastest practical push** into the gateway.
+- Some **lag** between true cost and cut-off is inherent; the **meter owns cut-off policy** (and thus **overrun** — e.g. Monetize 360 ~$10 wallet floor). We optimize for the **fastest practical push** into the gateway.
 
 ## Why
 
@@ -137,7 +137,7 @@ Gateway emit (raw units ± weights)
 ```
 
 - **3.7 Must:** accurate export so the meter can bind.
-- **Talk-back:** push as fast as practical; lag accepted; **leeway owned by the meter**.
+- **Talk-back:** push as fast as practical; lag accepted; **cut-off policy / overrun owned by the meter**.
 - Gateway may mirror go/no-go state only — not a second wallet ledger.
 
 ### Sketches
@@ -335,7 +335,7 @@ spec:
 | --- | --- |
 | **MaaS control layer (this proposal)** | Capture + optional weights on `MaaSModelRef`; optional weight overrides on `MaaSSubscription`; reconcile into emit / QoS consumers |
 | **Gateway / Praxis** | Hot-path emit; durable handoff; local go/no-go state when talk-back is enabled |
-| **External metering** | Cost, wallet, leeway, go/no-go push; CE consumer |
+| **External metering** | Cost, wallet, cut-off policy / overrun, go/no-go push; CE consumer |
 
 ## Consequences
 
@@ -348,7 +348,7 @@ spec:
 
 **Negative / risks**
 
-- Spend cut-off has **lag**; must document leeway ownership clearly for customers.
+- Spend cut-off has **lag** / **overrun**; must document that the meter owns cut-off policy clearly for customers.
 - Operators must maintain capture paths when providers change `usage` shapes.
 - Weighting overlapping units with **only** independent weights (no profile `defaultWeightExpr` / `weightExpr`) silently double-counts — needs docs + validation.
 - Existing `billingRate.perToken` overlaps this surface — reconcile or deprecate in API review.
